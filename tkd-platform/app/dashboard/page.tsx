@@ -28,11 +28,24 @@ export default async function DashboardPage() {
 
                 {/* Header */}
                 <div className="flex items-center justify-between mb-8">
-                    <div>
-                        <h1 className="text-3xl font-bold">
-                            <span className="text-blue-500">TKD</span> Dashboard
-                        </h1>
-                        <p className="text-gray-400 text-sm mt-1">{club.name}</p>
+                    <div className="flex items-center gap-4">
+                        {club.logo_url ? (
+                            <img
+                                src={club.logo_url}
+                                alt="Logo"
+                                className="w-16 h-16 rounded-xl object-cover border border-gray-700"
+                            />
+                        ) : (
+                            <div className="w-16 h-16 rounded-xl bg-gray-800 flex items-center justify-center text-2xl">
+                                🥋
+                            </div>
+                        )}
+                        <div>
+                            <h1 className="text-3xl font-bold">
+                                <span className="text-blue-500">TKD</span> Dashboard
+                            </h1>
+                            <p className="text-gray-400 text-sm mt-1">{club.name}</p>
+                        </div>
                     </div>
                     <div className="text-right flex flex-col items-end gap-2">
                         <p className="text-gray-400 text-sm">{user.email}</p>
