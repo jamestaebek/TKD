@@ -1,0 +1,6 @@
+﻿1/64 Final(R128)
+1/32 Final(R64)
+1/16 Final(R32)
+1/8 Final
+1/4 Final
+1/2Final

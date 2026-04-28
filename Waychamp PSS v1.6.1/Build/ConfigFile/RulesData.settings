@@ -1,0 +1,78 @@
+﻿<?xml version='1.0' encoding='utf-8'?>
+<SettingsFile xmlns="http://schemas.microsoft.com/VisualStudio/2004/01/settings" CurrentProfile="(Default)" GeneratedClassNamespace="JiJingTaekwondo.ConfigFile" GeneratedClassName="RulesData">
+  <Profiles />
+  <Settings>
+    <Setting Name="BodyTechPoints" Type="System.String" Scope="User">
+      <Value Profile="(Default)">1</Value>
+    </Setting>
+    <Setting Name="HeadPoints" Type="System.String" Scope="User">
+      <Value Profile="(Default)">3</Value>
+    </Setting>
+    <Setting Name="HeadTechPoints" Type="System.String" Scope="User">
+      <Value Profile="(Default)">1</Value>
+    </Setting>
+    <Setting Name="PunchPoints" Type="System.String" Scope="User">
+      <Value Profile="(Default)">1</Value>
+    </Setting>
+    <Setting Name="OvertimePoints" Type="System.String" Scope="User">
+      <Value Profile="(Default)">1</Value>
+    </Setting>
+    <Setting Name="CellingScore" Type="System.String" Scope="User">
+      <Value Profile="(Default)">99</Value>
+    </Setting>
+    <Setting Name="DiffScore" Type="System.String" Scope="User">
+      <Value Profile="(Default)">20</Value>
+    </Setting>
+    <Setting Name="NearMissLevel" Type="System.String" Scope="User">
+      <Value Profile="(Default)">5</Value>
+    </Setting>
+    <Setting Name="PARASpinningKickPoints" Type="System.String" Scope="User">
+      <Value Profile="(Default)">2</Value>
+    </Setting>
+    <Setting Name="PARATurningKickPoints" Type="System.String" Scope="User">
+      <Value Profile="(Default)">1</Value>
+    </Setting>
+    <Setting Name="Rounds" Type="System.String" Scope="User">
+      <Value Profile="(Default)">3</Value>
+    </Setting>
+    <Setting Name="RoundMinute" Type="System.String" Scope="User">
+      <Value Profile="(Default)">2</Value>
+    </Setting>
+    <Setting Name="RoundSecond" Type="System.String" Scope="User">
+      <Value Profile="(Default)">00</Value>
+    </Setting>
+    <Setting Name="KyeShiMinute" Type="System.String" Scope="User">
+      <Value Profile="(Default)">01</Value>
+    </Setting>
+    <Setting Name="KyeShiSecond" Type="System.String" Scope="User">
+      <Value Profile="(Default)">00</Value>
+    </Setting>
+    <Setting Name="RestMinute" Type="System.String" Scope="User">
+      <Value Profile="(Default)">01</Value>
+    </Setting>
+    <Setting Name="RestSecond" Type="System.String" Scope="User">
+      <Value Profile="(Default)">00</Value>
+    </Setting>
+    <Setting Name="GoldenMinute" Type="System.String" Scope="User">
+      <Value Profile="(Default)">01</Value>
+    </Setting>
+    <Setting Name="GoldenSecond" Type="System.String" Scope="User">
+      <Value Profile="(Default)">00</Value>
+    </Setting>
+    <Setting Name="BodyPoints" Type="System.String" Scope="User">
+      <Value Profile="(Default)">2</Value>
+    </Setting>
+    <Setting Name="MaxGamJeom" Type="System.String" Scope="User">
+      <Value Profile="(Default)">5</Value>
+    </Setting>
+    <Setting Name="RoundDifference" Type="System.Int32" Scope="User">
+      <Value Profile="(Default)">2</Value>
+    </Setting>
+    <Setting Name="UsePunch" Type="System.Int32" Scope="User">
+      <Value Profile="(Default)">0</Value>
+    </Setting>
+    <Setting Name="UseDoubleGamJeom" Type="System.Int32" Scope="User">
+      <Value Profile="(Default)">0</Value>
+    </Setting>
+  </Settings>
+</SettingsFile>

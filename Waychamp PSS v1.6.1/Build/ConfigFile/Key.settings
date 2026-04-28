@@ -1,0 +1,33 @@
+﻿<?xml version='1.0' encoding='utf-8'?>
+<SettingsFile xmlns="http://schemas.microsoft.com/VisualStudio/2004/01/settings" CurrentProfile="(Default)" GeneratedClassNamespace="JiJingTaekwondo.ConfigFile" GeneratedClassName="Key">
+  <Profiles />
+  <Settings>
+    <Setting Name="Start" Type="System.String" Scope="User">
+      <Value Profile="(Default)">S</Value>
+    </Setting>
+    <Setting Name="Stop" Type="System.String" Scope="User">
+      <Value Profile="(Default)">Space</Value>
+    </Setting>
+    <Setting Name="Next" Type="System.String" Scope="User">
+      <Value Profile="(Default)">N</Value>
+    </Setting>
+    <Setting Name="Final" Type="System.String" Scope="User">
+      <Value Profile="(Default)">R</Value>
+    </Setting>
+    <Setting Name="Point" Type="System.String" Scope="User">
+      <Value Profile="(Default)">P</Value>
+    </Setting>
+    <Setting Name="Kyeshi" Type="System.String" Scope="User">
+      <Value Profile="(Default)">K</Value>
+    </Setting>
+    <Setting Name="BlueGamJeom" Type="System.String" Scope="User">
+      <Value Profile="(Default)">A</Value>
+    </Setting>
+    <Setting Name="RedGamJeom" Type="System.String" Scope="User">
+      <Value Profile="(Default)">D</Value>
+    </Setting>
+    <Setting Name="Doc" Type="System.String" Scope="User">
+      <Value Profile="(Default)">J</Value>
+    </Setting>
+  </Settings>
+</SettingsFile>

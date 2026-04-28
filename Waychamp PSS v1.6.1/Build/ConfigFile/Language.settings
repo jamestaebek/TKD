@@ -1,0 +1,9 @@
+﻿<?xml version='1.0' encoding='utf-8'?>
+<SettingsFile xmlns="http://schemas.microsoft.com/VisualStudio/2004/01/settings" CurrentProfile="(Default)" GeneratedClassNamespace="com.seage.tech.pss.configFile" GeneratedClassName="Language">
+  <Profiles />
+  <Settings>
+    <Setting Name="CurrentLanguage" Type="System.String" Scope="User">
+      <Value Profile="(Default)">ZH</Value>
+    </Setting>
+  </Settings>
+</SettingsFile>

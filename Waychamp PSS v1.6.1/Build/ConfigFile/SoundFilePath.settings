@@ -1,0 +1,87 @@
+﻿<?xml version='1.0' encoding='utf-8'?>
+<SettingsFile xmlns="http://schemas.microsoft.com/VisualStudio/2004/01/settings" CurrentProfile="(Default)" GeneratedClassNamespace="JiJingTaekwondo.ConfigFile" GeneratedClassName="SoundFilePath">
+  <Profiles />
+  <Settings>
+    <Setting Name="EndOfTimePath" Type="System.String" Scope="User">
+      <Value Profile="(Default)">System-\work\sounds\StartEnd2.wav</Value>
+    </Setting>
+    <Setting Name="WhenBodyHitPath" Type="System.String" Scope="User">
+      <Value Profile="(Default)">System-\work\sounds\hitbody1.WAV</Value>
+    </Setting>
+    <Setting Name="WhenHeadHitPath" Type="System.String" Scope="User">
+      <Value Profile="(Default)">System-\work\sounds\hitbody1.WAV</Value>
+    </Setting>
+    <Setting Name="BeforeStart" Type="System.String" Scope="User">
+      <Value Profile="(Default)">System-\work\sounds\StartEnd2.wav</Value>
+    </Setting>
+    <Setting Name="WhenKyongGoPath" Type="System.String" Scope="User">
+      <Value Profile="(Default)" />
+    </Setting>
+    <Setting Name="TechMettingPath" Type="System.String" Scope="User">
+      <Value Profile="(Default)">System-\work\sounds\video.wav</Value>
+    </Setting>
+    <Setting Name="WhenGameJeomPath" Type="System.String" Scope="User">
+      <Value Profile="(Default)">System-\work\sounds\GamJeom.wav</Value>
+    </Setting>
+    <Setting Name="EndOfTimeEnable" Type="System.Boolean" Scope="User">
+      <Value Profile="(Default)">False</Value>
+    </Setting>
+    <Setting Name="WhenBodyHitEnable" Type="System.Boolean" Scope="User">
+      <Value Profile="(Default)">False</Value>
+    </Setting>
+    <Setting Name="WhenHeadHitEnable" Type="System.Boolean" Scope="User">
+      <Value Profile="(Default)">False</Value>
+    </Setting>
+    <Setting Name="BeforeStartEnable" Type="System.Boolean" Scope="User">
+      <Value Profile="(Default)">False</Value>
+    </Setting>
+    <Setting Name="WhenKyongGoEnable" Type="System.Boolean" Scope="User">
+      <Value Profile="(Default)">False</Value>
+    </Setting>
+    <Setting Name="WhenGamJeomEnable" Type="System.Boolean" Scope="User">
+      <Value Profile="(Default)">False</Value>
+    </Setting>
+    <Setting Name="TechMettingEnable" Type="System.Boolean" Scope="User">
+      <Value Profile="(Default)">False</Value>
+    </Setting>
+    <Setting Name="TimeBeforeVolume" Type="System.Double" Scope="User">
+      <Value Profile="(Default)">50</Value>
+    </Setting>
+    <Setting Name="EndOfTimeVolume" Type="System.Double" Scope="User">
+      <Value Profile="(Default)">50</Value>
+    </Setting>
+    <Setting Name="BeforeStartRoundVolume" Type="System.Double" Scope="User">
+      <Value Profile="(Default)">50</Value>
+    </Setting>
+    <Setting Name="WhenBodyHitVolume" Type="System.Double" Scope="User">
+      <Value Profile="(Default)">50</Value>
+    </Setting>
+    <Setting Name="WhenHeadHitVolume" Type="System.Double" Scope="User">
+      <Value Profile="(Default)">50</Value>
+    </Setting>
+    <Setting Name="WhenKyongGoVolume" Type="System.Double" Scope="User">
+      <Value Profile="(Default)">50</Value>
+    </Setting>
+    <Setting Name="WhenGamJeomVolume" Type="System.Double" Scope="User">
+      <Value Profile="(Default)">50</Value>
+    </Setting>
+    <Setting Name="TechMettingVolume" Type="System.Double" Scope="User">
+      <Value Profile="(Default)">50</Value>
+    </Setting>
+    <Setting Name="ImportMatchLogpath" Type="System.String" Scope="User">
+      <Value Profile="(Default)">System.Environment.CurrentDirectory-\MatchLog</Value>
+    </Setting>
+    <Setting Name="addScorePath" Type="System.String" Scope="User">
+      <Value Profile="(Default)">System-\work\sounds\addscore.mp3</Value>
+    </Setting>
+    <Setting Name="deleteScorePath" Type="System.String" Scope="User">
+      <Value Profile="(Default)">System-\work\sounds\deletescore.mp3</Value>
+    </Setting>
+    <Setting Name="deviceOfflinePath" Type="System.String" Scope="User">
+      <Value Profile="(Default)">System-\work\sounds\deviceoffline.mp3</Value>
+    </Setting>
+    <Setting Name="punchPath" Type="System.String" Scope="User">
+      <Value Profile="(Default)">System-\work\sounds\punch1.wav</Value>
+    </Setting>
+  </Settings>
+</SettingsFile>

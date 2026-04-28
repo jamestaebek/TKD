@@ -1,0 +1,24 @@
+﻿<?xml version='1.0' encoding='utf-8'?>
+<SettingsFile xmlns="http://schemas.microsoft.com/VisualStudio/2004/01/settings" CurrentProfile="(Default)" GeneratedClassNamespace="com.seage.tech.pss.configFile" GeneratedClassName="Phase">
+  <Profiles />
+  <Settings>
+    <Setting Name="phase1" Type="System.String" Scope="User">
+      <Value Profile="(Default)">1/64 Final(R128)</Value>
+    </Setting>
+    <Setting Name="phase2" Type="System.String" Scope="User">
+      <Value Profile="(Default)">1/32 Final(R64)</Value>
+    </Setting>
+    <Setting Name="phase3" Type="System.String" Scope="User">
+      <Value Profile="(Default)">1/16 Final(R32)</Value>
+    </Setting>
+    <Setting Name="phase4" Type="System.String" Scope="User">
+      <Value Profile="(Default)">1/8 Final</Value>
+    </Setting>
+    <Setting Name="phase5" Type="System.String" Scope="User">
+      <Value Profile="(Default)">1/4 Final</Value>
+    </Setting>
+    <Setting Name="phase6" Type="System.String" Scope="User">
+      <Value Profile="(Default)">1/2Final</Value>
+    </Setting>
+  </Settings>
+</SettingsFile>
