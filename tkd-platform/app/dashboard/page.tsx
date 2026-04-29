@@ -14,7 +14,11 @@ export default async function DashboardPage() {
 
     const { count: athleteCount } = await supabase
         .from('athletes').select('*', { count: 'exact', head: true })
-        .eq('club_id', club.id)
+        .eq('club_id', club.id).eq('status', 'active')
+
+    const { count: pendingCount } = await supabase
+        .from('athletes').select('*', { count: 'exact', head: true })
+        .eq('club_id', club.id).eq('status', 'pending')
 
     const { data: trophies } = await supabase
         .from('club_trophies').select('*').eq('club_id', club.id)
@@ -29,6 +33,12 @@ export default async function DashboardPage() {
 
     const { data: platformStats } = await supabase
         .from('platform_stats').select('*').single()
+
+    const { data: allClubs } = await supabase
+        .from('clubs')
+        .select('id, name, city, latitude, longitude')
+        .eq('status', 'active')
+        .not('latitude', 'is', null)
 
     const myRank = ranking?.findIndex(r => r.id === club.id) ?? -1
     const myRankNum = myRank >= 0 ? myRank + 1 : null
@@ -55,11 +65,10 @@ export default async function DashboardPage() {
     return (
         <div className="flex min-h-screen bg-[#07070f] text-white">
             <Sidebar userEmail={user.email ?? ''} />
-
             <main className="flex-1 p-6 overflow-y-auto">
                 <div className="max-w-6xl mx-auto space-y-5">
 
-                    {/* Hero banner */}
+                    {/* Hero */}
                     <div className="bg-[#0d0d1a] border border-[#1e1e2e] rounded-2xl p-6 flex items-center gap-5">
                         {club.logo_url ? (
                             <img src={club.logo_url} alt="Logo" className="w-20 h-20 rounded-xl object-cover border-2 border-[#2a2a4a]" />
@@ -82,7 +91,7 @@ export default async function DashboardPage() {
                         )}
                     </div>
 
-                    {/* Counter plataforma */}
+                    {/* Counter */}
                     <div className="bg-[#0d0d1a] border border-blue-900/40 rounded-2xl p-5 flex items-center gap-6">
                         <div className="flex-1">
                             <div className="text-4xl font-bold text-blue-400">
@@ -97,21 +106,33 @@ export default async function DashboardPage() {
                         <div className="text-right border-l border-[#1e1e2e] pl-6">
                             <div className="text-xs text-gray-600">Tu club aporta</div>
                             <div className="text-3xl font-bold text-blue-400 mt-1">{athleteCount ?? 0}</div>
-                            <div className="text-xs text-gray-600 mt-1">
-                                atletas · {platformStats?.total_athletes
-                                    ? (((athleteCount ?? 0) / platformStats.total_athletes) * 100).toFixed(1)
-                                    : 0}%
-                            </div>
+                            <div className="text-xs text-gray-600 mt-1">atletas activos</div>
                         </div>
                     </div>
+
+                    {/* Pendientes alert */}
+                    {pendingCount && pendingCount > 0 ? (
+                        <Link href="/dashboard/athletes" className="block bg-yellow-900/20 border border-yellow-900/40 hover:border-yellow-500/50 rounded-2xl p-4 transition">
+                            <div className="flex items-center gap-3">
+                                <span className="text-2xl">⏳</span>
+                                <div>
+                                    <div className="text-sm font-medium text-yellow-400">
+                                        {pendingCount} solicitud{pendingCount > 1 ? 'es' : ''} pendiente{pendingCount > 1 ? 's' : ''} de aprobación
+                                    </div>
+                                    <div className="text-xs text-gray-500 mt-0.5">Atletas que se registraron por link — haz clic para revisar</div>
+                                </div>
+                                <div className="ml-auto text-yellow-400 text-sm">Ver →</div>
+                            </div>
+                        </Link>
+                    ) : null}
 
                     {/* Stats */}
                     <div className="grid grid-cols-4 gap-3">
                         {[
-                            { label: 'Atletas', value: athleteCount ?? 0, color: 'text-blue-400', trend: '↑ activos', trendColor: 'text-green-400' },
+                            { label: 'Atletas activos', value: athleteCount ?? 0, color: 'text-blue-400', trend: pendingCount ? `${pendingCount} pendientes` : '✓ al día', trendColor: pendingCount ? 'text-yellow-400' : 'text-green-400' },
                             { label: 'Torneos', value: 0, color: 'text-purple-400', trend: 'próximo disponible', trendColor: 'text-gray-500' },
                             { label: 'Inscritos', value: 0, color: 'text-yellow-400', trend: 'sin torneo activo', trendColor: 'text-gray-500' },
-                            { label: 'Medallas', value: (trophies?.length ?? 0), color: 'text-green-400', trend: `${gold}🥇 ${silver}🥈 ${bronze}🥉`, trendColor: 'text-yellow-400' },
+                            { label: 'Medallas', value: trophies?.length ?? 0, color: 'text-green-400', trend: `${gold}🥇 ${silver}🥈 ${bronze}🥉`, trendColor: 'text-yellow-400' },
                         ].map(s => (
                             <div key={s.label} className="bg-[#0d0d1a] border border-[#1e1e2e] rounded-xl p-4">
                                 <div className="text-xs text-gray-500 uppercase tracking-wider mb-2">{s.label}</div>
@@ -126,28 +147,40 @@ export default async function DashboardPage() {
                         <div className="col-span-3 bg-[#0d0d1a] border border-[#1e1e2e] rounded-2xl p-5">
                             <div className="text-xs text-gray-500 uppercase tracking-wider mb-3">Clubes en Colombia</div>
                             <div className="flex items-center justify-center h-40 bg-[#0a0a14] rounded-xl relative overflow-hidden">
-                                <svg viewBox="0 0 200 220" className="h-36 opacity-20">
+                                <svg viewBox="0 0 200 220" className="h-36 opacity-20 absolute">
                                     <path fill="#3b82f6" d="M95 10 Q110 8 120 15 L130 25 Q140 30 138 45 L135 55 Q145 60 148 75 L145 90 Q150 100 145 110 L140 125 Q145 135 140 148 L130 158 Q120 170 110 175 L100 185 Q90 190 82 185 L72 178 Q62 170 58 158 L50 145 Q42 132 45 118 L48 105 Q42 92 45 80 L50 68 Q48 55 55 45 L62 35 Q70 20 80 14 Z" />
                                 </svg>
-                                {[
-                                    { x: '52%', y: '45%', mine: true },
-                                    { x: '40%', y: '35%', mine: false },
-                                    { x: '35%', y: '55%', mine: false },
-                                    { x: '48%', y: '62%', mine: false },
-                                    { x: '62%', y: '40%', mine: false },
-                                    { x: '55%', y: '70%', mine: false },
-                                    { x: '55%', y: '30%', mine: false },
-                                ].map((dot, i) => (
-                                    <div
-                                        key={i}
-                                        className={`absolute rounded-full ${dot.mine ? 'w-3 h-3 bg-yellow-400 ring-2 ring-yellow-400/30' : 'w-2 h-2 bg-blue-500'}`}
-                                        style={{ left: dot.x, top: dot.y, transform: 'translate(-50%,-50%)' }}
-                                    />
-                                ))}
+                                {allClubs?.map(c => {
+                                    if (!c.latitude || !c.longitude) return null
+                                    const x = ((c.longitude - (-79)) / ((-67) - (-79)) * 160 + 20)
+                                    const y = ((12.5 - c.latitude) / (12.5 - (-4.5)) * 180 + 20)
+                                    const isMe = c.id === club.id
+                                    return (
+                                        <div
+                                            key={c.id}
+                                            title={c.name}
+                                            className={`absolute rounded-full transition-all ${isMe
+                                                    ? 'w-3 h-3 bg-yellow-400 ring-2 ring-yellow-400/30'
+                                                    : 'w-2 h-2 bg-blue-500 opacity-70 hover:opacity-100'
+                                                }`}
+                                            style={{
+                                                left: `${x}px`,
+                                                top: `${y}px`,
+                                                transform: 'translate(-50%, -50%)',
+                                            }}
+                                        />
+                                    )
+                                })}
                             </div>
                             <div className="flex items-center gap-4 mt-3 text-xs text-gray-500">
-                                <span className="flex items-center gap-1.5"><span className="w-2 h-2 rounded-full bg-yellow-400 inline-block"></span>Tu club</span>
-                                <span className="flex items-center gap-1.5"><span className="w-2 h-2 rounded-full bg-blue-500 inline-block"></span>Otros clubes ({(platformStats?.total_clubs ?? 1) - 1})</span>
+                                <span className="flex items-center gap-1.5">
+                                    <span className="w-2 h-2 rounded-full bg-yellow-400 inline-block"></span>
+                                    Tu club — {club.city}
+                                </span>
+                                <span className="flex items-center gap-1.5">
+                                    <span className="w-2 h-2 rounded-full bg-blue-500 inline-block"></span>
+                                    Otros clubes ({Math.max((allClubs?.length ?? 1) - 1, 0)})
+                                </span>
                             </div>
                         </div>
 
@@ -172,11 +205,11 @@ export default async function DashboardPage() {
                         </div>
                     </div>
 
-                    {/* Acciones rápidas */}
+                    {/* Acciones */}
                     <div className="grid grid-cols-3 gap-3">
                         {[
                             { href: '/dashboard/athletes/new', icon: '＋', label: 'Registrar atleta', sub: 'Agrega un deportista', iconBg: 'bg-blue-950', iconColor: 'text-blue-400' },
-                            { href: '/dashboard/athletes', icon: '👥', label: 'Ver atletas', sub: `${athleteCount ?? 0} registrados`, iconBg: 'bg-green-950', iconColor: 'text-green-400' },
+                            { href: '/dashboard/athletes', icon: '👥', label: 'Ver atletas', sub: `${athleteCount ?? 0} activos`, iconBg: 'bg-green-950', iconColor: 'text-green-400' },
                             { href: '/dashboard/tournaments', icon: '🏆', label: 'Ver torneos', sub: 'Inscribe tus atletas', iconBg: 'bg-purple-950', iconColor: 'text-purple-400' },
                         ].map(a => (
                             <Link key={a.href} href={a.href} className="bg-[#0d0d1a] border border-[#1e1e2e] hover:border-blue-500/50 rounded-xl p-5 transition group">
@@ -227,9 +260,7 @@ export default async function DashboardPage() {
                                         key={r.id}
                                         className={`flex items-center gap-3 py-2 px-2 rounded-lg ${r.id === club.id ? 'bg-[#13131f] border border-yellow-900/40' : ''}`}
                                     >
-                                        <div className={`text-xs font-bold w-5 ${i < 3 ? 'text-yellow-400' : 'text-gray-600'}`}>
-                                            {i + 1}
-                                        </div>
+                                        <div className={`text-xs font-bold w-5 ${i < 3 ? 'text-yellow-400' : 'text-gray-600'}`}>{i + 1}</div>
                                         <div className="w-7 h-7 rounded-lg bg-[#13132a] flex items-center justify-center text-xs overflow-hidden flex-shrink-0">
                                             {r.logo_url ? <img src={r.logo_url} alt="" className="w-full h-full object-cover" /> : '🥋'}
                                         </div>

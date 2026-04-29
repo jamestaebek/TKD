@@ -134,7 +134,7 @@ export default function RegisterClubPage() {
         const { error } = await supabase.from('clubs').insert({
             ...form,
             user_id: user.id,
-            status: 'pending',
+            status: 'active',
         })
         if (!error) router.push('/dashboard')
         setLoading(false)

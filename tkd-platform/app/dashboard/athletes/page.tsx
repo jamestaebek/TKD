@@ -5,6 +5,8 @@ import { createClient } from '@/lib/supabase/client'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import Sidebar from '@/components/Sidebar'
+import InviteButton from '@/components/InviteButton'
+import { logAudit } from '@/lib/audit'
 
 interface Athlete {
     id: string
@@ -18,6 +20,7 @@ interface Athlete {
     status: string
     doc_type: string
     doc_number: string
+    registration_source: string | null
     belt_levels: { name: string; default_level: string } | null
 }
 
@@ -51,6 +54,7 @@ export default function AthletesPage() {
     const [loading, setLoading] = useState(true)
     const [userEmail, setUserEmail] = useState('')
     const [clubId, setClubId] = useState('')
+    const [inviteToken, setInviteToken] = useState('')
     const [search, setSearch] = useState('')
     const [filterGender, setFilterGender] = useState('')
     const [filterLevel, setFilterLevel] = useState('')
@@ -63,9 +67,10 @@ export default function AthletesPage() {
             if (!user) return
             setUserEmail(user.email ?? '')
             const { data: club } = await supabase
-                .from('clubs').select('id').eq('user_id', user.id).single()
+                .from('clubs').select('id, invite_token').eq('user_id', user.id).single()
             if (!club) return
             setClubId(club.id)
+            setInviteToken(club.invite_token ?? '')
             const { data } = await supabase
                 .from('athletes')
                 .select('*, belt_levels(name, default_level)')
@@ -83,18 +88,73 @@ export default function AthletesPage() {
             .from('athletes').update({ status: newStatus }).eq('id', id)
         if (!error) {
             setAthletes(prev => prev.map(a => a.id === id ? { ...a, status: newStatus } : a))
+            await logAudit({
+                action: 'athlete_suspended',
+                entity_type: 'athlete',
+                entity_id: id,
+                club_id: clubId,
+                details: {
+                    previous_status: current,
+                    new_status: newStatus,
+                    changed_at: new Date().toISOString()
+                }
+            })
+        }
+    }
+    const approveAthlete = async (id: string) => {
+        const { error } = await supabase
+            .from('athletes').update({ status: 'active' }).eq('id', id)
+        if (!error) {
+            setAthletes(prev => prev.map(a => a.id === id ? { ...a, status: 'active' } : a))
+            await logAudit({
+                action: 'athlete_approved',
+                entity_type: 'athlete',
+                entity_id: id,
+                club_id: clubId,
+                details: { approved_at: new Date().toISOString() }
+            })
         }
     }
 
-    const deleteAthlete = async (id: string) => {
+    const rejectAthlete = async (id: string) => {
+        const athlete = athletes.find(a => a.id === id)
         const { error } = await supabase.from('athletes').delete().eq('id', id)
         if (!error) {
+            setAthletes(prev => prev.filter(a => a.id !== id))
+            await logAudit({
+                action: 'athlete_rejected',
+                entity_type: 'athlete',
+                entity_id: id,
+                club_id: clubId,
+                details: {
+                    athlete_name: `${athlete?.first_name} ${athlete?.last_name}`,
+                    rejected_at: new Date().toISOString()
+                }
+            })
+        }
+    }
+    const deleteAthlete = async (id: string) => {
+        const athlete = athletes.find(a => a.id === id)
+        const { error } = await supabase.from('athletes').delete().eq('id', id)
+        if (!error) {
+            await logAudit({
+                action: 'athlete_deleted',
+                entity_type: 'athlete',
+                entity_id: id,
+                club_id: clubId,
+                details: {
+                    athlete_name: `${athlete?.first_name} ${athlete?.last_name}`,
+                    deleted_at: new Date().toISOString()
+                }
+            })
             setAthletes(prev => prev.filter(a => a.id !== id))
             setConfirmDelete(null)
         }
     }
+    const pending = athletes.filter(a => a.status === 'pending')
 
     const filtered = athletes.filter(a => {
+        if (a.status === 'pending') return false
         const fullName = `${a.first_name} ${a.last_name}`.toLowerCase()
         const matchSearch = !search || fullName.includes(search.toLowerCase()) ||
             a.doc_number?.includes(search) || a.email?.toLowerCase().includes(search.toLowerCase())
@@ -117,20 +177,70 @@ export default function AthletesPage() {
                                 <span className="text-blue-500">TKD</span> — Atletas
                             </h1>
                             <p className="text-gray-500 text-sm mt-1">
-                                {filtered.length} de {athletes.length} atletas
+                                {filtered.length} de {athletes.filter(a => a.status !== 'pending').length} atletas
                             </p>
                         </div>
-                        <Link
-                            href="/dashboard/athletes/new"
-                            className="bg-blue-600 hover:bg-blue-700 text-white px-5 py-2.5 rounded-xl text-sm font-medium transition"
-                        >
-                            + Registrar atleta
-                        </Link>
+                        <div className="flex items-center gap-3">
+                            {inviteToken && <InviteButton token={inviteToken} />}
+                            <Link
+                                href="/dashboard/athletes/new"
+                                className="bg-blue-600 hover:bg-blue-700 text-white px-5 py-2.5 rounded-xl text-sm font-medium transition"
+                            >
+                                + Registrar atleta
+                            </Link>
+                        </div>
                     </div>
+
+                    {/* Solicitudes pendientes */}
+                    {pending.length > 0 && (
+                        <div className="bg-yellow-900/20 border border-yellow-900/40 rounded-2xl p-5 mb-6">
+                            <div className="flex items-center gap-2 mb-4">
+                                <span className="text-yellow-400 font-medium text-sm">
+                                    ⏳ {pending.length} solicitud{pending.length > 1 ? 'es' : ''} pendiente{pending.length > 1 ? 's' : ''} de aprobación
+                                </span>
+                            </div>
+                            <div className="space-y-3">
+                                {pending.map(a => {
+                                    const age = calculateAge(a.birth_date)
+                                    const ageGroup = getAgeGroup(age)
+                                    return (
+                                        <div key={a.id} className="flex items-center gap-3 bg-[#0d0d1a] border border-[#1e1e2e] rounded-xl p-3">
+                                            <div className="w-9 h-9 rounded-lg bg-[#13132a] flex items-center justify-center text-sm font-bold text-yellow-400 flex-shrink-0">
+                                                {a.first_name[0]}{a.last_name[0]}
+                                            </div>
+                                            <div className="flex-1 min-w-0">
+                                                <div className="text-sm font-medium text-white">{a.first_name} {a.last_name}</div>
+                                                <div className="text-xs text-gray-500">{age} años · {ageGroup} · {a.email}</div>
+                                            </div>
+                                            <div className="flex items-center gap-2">
+                                                <button
+                                                    onClick={() => approveAthlete(a.id)}
+                                                    className="text-xs bg-green-600 hover:bg-green-700 text-white px-3 py-1.5 rounded-lg transition"
+                                                >
+                                                    Aprobar
+                                                </button>
+                                                <button
+                                                    onClick={() => rejectAthlete(a.id)}
+                                                    className="text-xs bg-red-900/40 hover:bg-red-900/70 text-red-400 px-3 py-1.5 rounded-lg transition"
+                                                >
+                                                    Rechazar
+                                                </button>
+                                                <button
+                                                    onClick={() => router.push(`/dashboard/athletes/${a.id}/edit`)}
+                                                    className="text-xs text-blue-400 hover:text-blue-300 px-3 py-1.5 rounded-lg hover:bg-blue-900/20 transition"
+                                                >
+                                                    Ver
+                                                </button>
+                                            </div>
+                                        </div>
+                                    )
+                                })}
+                            </div>
+                        </div>
+                    )}
 
                     {/* Filtros */}
                     <div className="flex flex-wrap gap-3 mb-5">
-                        {/* Búsqueda */}
                         <div className="relative flex-1 min-w-48">
                             <svg className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.5" viewBox="0 0 24 24">
                                 <circle cx="11" cy="11" r="8" /><path d="m21 21-4.35-4.35" />
@@ -142,7 +252,6 @@ export default function AthletesPage() {
                                 onChange={e => setSearch(e.target.value)}
                             />
                         </div>
-
                         <select
                             className="bg-[#0d0d1a] border border-[#1e1e2e] rounded-xl px-3 py-2.5 text-sm text-white focus:outline-none focus:border-blue-500 transition"
                             value={filterGender}
@@ -152,7 +261,6 @@ export default function AthletesPage() {
                             <option value="M">Masculino</option>
                             <option value="F">Femenino</option>
                         </select>
-
                         <select
                             className="bg-[#0d0d1a] border border-[#1e1e2e] rounded-xl px-3 py-2.5 text-sm text-white focus:outline-none focus:border-blue-500 transition"
                             value={filterLevel}
@@ -163,7 +271,6 @@ export default function AthletesPage() {
                             <option value="avanzado">Avanzado</option>
                             <option value="negro">Negro</option>
                         </select>
-
                         <select
                             className="bg-[#0d0d1a] border border-[#1e1e2e] rounded-xl px-3 py-2.5 text-sm text-white focus:outline-none focus:border-blue-500 transition"
                             value={filterStatus}
@@ -173,13 +280,12 @@ export default function AthletesPage() {
                             <option value="active">Activo</option>
                             <option value="suspended">Suspendido</option>
                         </select>
-
                         {(search || filterGender || filterLevel || filterStatus) && (
                             <button
                                 onClick={() => { setSearch(''); setFilterGender(''); setFilterLevel(''); setFilterStatus('') }}
                                 className="text-xs text-gray-500 hover:text-white transition px-3"
                             >
-                                Limpiar filtros ✕
+                                Limpiar ✕
                             </button>
                         )}
                     </div>
@@ -242,8 +348,8 @@ export default function AthletesPage() {
                                                     <button
                                                         onClick={() => toggleStatus(a.id, a.status)}
                                                         className={`text-xs px-3 py-1 rounded-full transition cursor-pointer ${a.status === 'active'
-                                                                ? 'bg-green-900/40 text-green-400 hover:bg-green-900/70'
-                                                                : 'bg-red-900/40 text-red-400 hover:bg-red-900/70'
+                                                            ? 'bg-green-900/40 text-green-400 hover:bg-green-900/70'
+                                                            : 'bg-red-900/40 text-red-400 hover:bg-red-900/70'
                                                             }`}
                                                     >
                                                         {a.status === 'active' ? 'Activo' : 'Suspendido'}
@@ -274,13 +380,16 @@ export default function AthletesPage() {
                     ) : (
                         <div className="bg-[#0d0d1a] border border-[#1e1e2e] rounded-2xl p-12 text-center">
                             <div className="text-5xl mb-4">🥋</div>
-                            {athletes.length === 0 ? (
+                            {athletes.filter(a => a.status !== 'pending').length === 0 ? (
                                 <>
                                     <h2 className="text-lg font-semibold mb-2">No hay atletas registrados</h2>
-                                    <p className="text-gray-500 text-sm mb-6">Registra el primer atleta de tu club</p>
-                                    <Link href="/dashboard/athletes/new" className="bg-blue-600 hover:bg-blue-700 text-white px-6 py-3 rounded-xl text-sm font-medium transition">
-                                        + Registrar primer atleta
-                                    </Link>
+                                    <p className="text-gray-500 text-sm mb-6">Registra el primer atleta o comparte el link de invitación</p>
+                                    <div className="flex items-center justify-center gap-3">
+                                        {inviteToken && <InviteButton token={inviteToken} />}
+                                        <Link href="/dashboard/athletes/new" className="bg-blue-600 hover:bg-blue-700 text-white px-6 py-3 rounded-xl text-sm font-medium transition">
+                                            + Registrar atleta
+                                        </Link>
+                                    </div>
                                 </>
                             ) : (
                                 <>
@@ -297,7 +406,7 @@ export default function AthletesPage() {
                     <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50">
                         <div className="bg-[#0d0d1a] border border-[#1e1e2e] rounded-2xl p-6 max-w-sm w-full mx-4">
                             <h3 className="text-lg font-semibold mb-2">¿Eliminar atleta?</h3>
-                            <p className="text-gray-400 text-sm mb-6">Esta acción no se puede deshacer. El atleta será eliminado permanentemente.</p>
+                            <p className="text-gray-400 text-sm mb-6">Esta acción no se puede deshacer.</p>
                             <div className="flex gap-3">
                                 <button
                                     onClick={() => setConfirmDelete(null)}
