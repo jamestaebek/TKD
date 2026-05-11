@@ -100,7 +100,7 @@ export default function NewFogueoPage() {
 
     const toggleAthlete = (id: string) => {
         setSelectedAthletes(prev =>
-            prev.includes(id) ? prev.filter(a => a !== id) : [...prev, a]
+            prev.includes(id) ? prev.filter(a => a !== id) : [...prev, id]
         )
     }
 
@@ -196,6 +196,7 @@ export default function NewFogueoPage() {
             }
 
             toast.success('Fogueo creado exitosamente')
+            setTimeout(() => router.push(`/dashboard/tournaments/fogueos/${fogueo.id}`), 1000)
             setTimeout(() => router.push(`/dashboard/tournaments/fogueos/${fogueo.id}`), 1000)
         } catch {
             toast.error('Error de conexión. Intenta de nuevo.')
