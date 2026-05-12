@@ -12,6 +12,12 @@ export default async function FogueosPage() {
         .from('clubs').select('id, name').eq('user_id', user.id).single()
     if (!club) redirect('/dashboard/club/register')
 
+    const { data: invitedRows } = await supabase
+        .from('fogueo_clubs')
+        .select('fogueo_id')
+        .eq('club_id', club.id)
+    const invitedIds = (invitedRows ?? []).map(r => r.fogueo_id)
+
     const { data: fogueos } = await supabase
         .from('fogueos')
         .select(`
@@ -20,6 +26,7 @@ export default async function FogueosPage() {
       fogueo_clubs(count),
       fogueo_athletes(count)
     `)
+        .or(`club_id.eq.${club.id},visibility.neq.invite_only${invitedIds.length > 0 ? `,id.in.(${invitedIds.join(',')})` : ''}`)
         .order('event_date', { ascending: true })
 
     const today = new Date().toISOString().split('T')[0]

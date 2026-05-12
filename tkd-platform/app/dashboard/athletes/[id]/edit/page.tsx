@@ -122,14 +122,15 @@ export default function EditAthletePage() {
 
             const { data: club } = await supabase
                 .from('clubs').select('id').eq('user_id', user.id).single()
-            if (club) setClubId(club.id)
+            if (!club) return
+            setClubId(club.id)
 
             const { data: beltData } = await supabase
                 .from('belt_levels').select('*').order('sort_order')
             if (beltData) setBelts(beltData)
 
             const { data: athlete } = await supabase
-                .from('athletes').select('*').eq('id', athleteId).single()
+                .from('athletes').select('*').eq('id', athleteId).eq('club_id', club.id).single()
             if (athlete) {
                 setForm({
                     first_name: athlete.first_name ?? '',
@@ -215,7 +216,7 @@ export default function EditAthletePage() {
             training_weight: form.training_weight ? parseFloat(form.training_weight) : null,
             photo_url: form.photo_url || null,
             updated_at: new Date().toISOString(),
-        }).eq('id', athleteId)
+        }).eq('id', athleteId).eq('club_id', clubId)
         if (!error) setSaved(true)
         setLoading(false)
     }

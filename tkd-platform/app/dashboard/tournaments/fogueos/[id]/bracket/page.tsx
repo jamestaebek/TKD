@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback } from 'react'
 import { createClient } from '@/lib/supabase/client'
-import { useParams, useSearchParams } from 'next/navigation'
+import { useParams } from 'next/navigation'
 import Link from 'next/link'
 import Sidebar from '@/components/Sidebar'
 import { useToast } from '@/hooks/useToast'
@@ -25,6 +25,8 @@ interface Match {
     round_number: number
     match_number: number
     global_match_number: number
+    display_number: number | null
+    is_pre_match: boolean
     athlete_blue_id: string | null
     athlete_red_id: string | null
     winner_id: string | null
@@ -42,6 +44,8 @@ interface Pyramid {
     subtitle: string
     gender_group: string | null
     parent_group_id: string | null
+    has_pre_match: boolean
+    pre_match_count: number
 }
 
 interface PyramidGroup {
@@ -50,6 +54,15 @@ interface PyramidGroup {
     sortMode: string
     pyramids: Pyramid[]
 }
+
+interface BracketConfig {
+    bracketSize: number
+    preMatchCount: number
+    byeCount: number
+    useOutbracket: boolean
+}
+
+// ─── Helpers ────────────────────────────────────────────────────────────────
 
 function calculateAge(birthDate: string): number {
     if (!birthDate) return 0
@@ -85,11 +98,46 @@ function getWeightCategory(weight: number): string {
     return '+78kg'
 }
 
+// Largest power of 2 that is <= n
+function prevPowerOf2(n: number): number {
+    let p = 1
+    while (p * 2 <= n) p *= 2
+    return p
+}
+
+// Smallest power of 2 that is >= n
 function nextPowerOf2(n: number): number {
     if (n <= 1) return 1
     let p = 1
     while (p < n) p *= 2
     return p
+}
+
+/**
+ * Decides whether to use outbracket (lower bracket + pre-matches) or
+ * standard BYEs (upper bracket + empty slots).
+ *
+ * Rule: use outbracket when it produces fewer "idle" slots than BYEs.
+ *   9 athletes → lower=8, upper=16  → byes=7, pre=1  → outbracket (7>1)
+ *  27 athletes → lower=16, upper=32 → byes=5, pre=11 → BYEs (5<11)
+ *  33 athletes → lower=32, upper=64 → byes=31, pre=1 → outbracket (31>1)
+ *  36 athletes → lower=32, upper=64 → byes=28, pre=4 → outbracket (28>4)
+ */
+function getBracketConfig(n: number): BracketConfig {
+    const lower = prevPowerOf2(n)
+    const upper = nextPowerOf2(n)
+
+    if (n === lower || n === upper) {
+        return { bracketSize: n, preMatchCount: 0, byeCount: 0, useOutbracket: false }
+    }
+
+    const byesNeeded = upper - n
+    const preMatchsNeeded = n - lower
+
+    if (byesNeeded > preMatchsNeeded) {
+        return { bracketSize: lower, preMatchCount: preMatchsNeeded, byeCount: 0, useOutbracket: true }
+    }
+    return { bracketSize: upper, preMatchCount: 0, byeCount: byesNeeded, useOutbracket: false }
 }
 
 function generateSubtitle(sortMode: string, athletes: Athlete[]): string {
@@ -126,6 +174,27 @@ function generateSubtitle(sortMode: string, athletes: Athlete[]): string {
     }
 }
 
+// Progressive disclosure: returns rounds to show and the first locked round.
+// Always receives only main-bracket matches (round >= 1); round 0 is handled separately.
+function getVisibleRounds(matches: Match[]): { visible: number[]; nextLocked: number | null } {
+    const allRounds = [...new Set(matches.map(m => m.round_number))].sort((a, b) => a - b)
+    const visible: number[] = []
+
+    for (let i = 0; i < allRounds.length; i++) {
+        const round = allRounds[i]
+        visible.push(round)
+        const realInRound = matches.filter(m => m.round_number === round && !m.is_bye)
+        const allDone = realInRound.length > 0 && realInRound.every(m => m.status === 'finished')
+        if (!allDone) {
+            const nextLocked = i + 1 < allRounds.length ? allRounds[i + 1] : null
+            return { visible, nextLocked }
+        }
+    }
+    return { visible, nextLocked: null }
+}
+
+// ─── Constants ───────────────────────────────────────────────────────────────
+
 const SORT_MODES = [
     { id: 'level_gender_weight', label: 'Nivel + Género + Peso', desc: 'Más equilibrado' },
     { id: 'level_gender', label: 'Nivel + Género', desc: 'Sin restricción de peso' },
@@ -144,9 +213,10 @@ const SORT_MODE_LABELS: Record<string, string> = {
     manual: 'Manual',
 }
 
+// ─── Component ───────────────────────────────────────────────────────────────
+
 export default function BracketPage() {
     const params = useParams()
-    const searchParams = useSearchParams()
     const supabase = createClient()
     const { toasts, removeToast, toast } = useToast()
     const fogueoId = params.id as string
@@ -171,6 +241,8 @@ export default function BracketPage() {
     const [joinedClubs, setJoinedClubs] = useState<any[]>([])
     const today = new Date().toISOString().split('T')[0]
 
+    // ── Load ────────────────────────────────────────────────────────────────
+
     useEffect(() => {
         const load = async () => {
             const { data: { user } } = await supabase.auth.getUser()
@@ -186,21 +258,25 @@ export default function BracketPage() {
                 .from('fogueos').select('*').eq('id', fogueoId).single()
             if (fog) { setFogueo(fog); setIsOrganizer(fog.club_id === club.id) }
 
-            // Cargar atletas del fogueo
+            // No club_id filter — load athletes from ALL enrolled clubs
             const { data: fa } = await supabase
                 .from('fogueo_athletes')
-                .select('*, athletes(*, belt_levels(name, default_level, sort_order)), clubs(name)')
+                .select('*, athletes(*, belt_levels(name, default_level, sort_order))')
                 .eq('fogueo_id', fogueoId)
             if (fa) {
+                const clubIds = [...new Set(fa.map(f => f.club_id))]
+                const { data: clubsData } = await supabase
+                    .from('clubs').select('id, name').in('id', clubIds)
+                const clubMap: Record<string, string> = {}
+                clubsData?.forEach(c => { clubMap[c.id] = c.name })
                 const athletes = fa.map(f => ({
                     ...(f.athletes as any),
                     club_id: f.club_id,
-                    club_name: (f.clubs as any)?.name ?? '',
+                    club_name: clubMap[f.club_id] ?? '',
                 }))
                 setAllAthletes(athletes)
             }
 
-            // Cargar pirámides
             const { data: pyrs } = await supabase
                 .from('fogueo_pyramids').select('*')
                 .eq('fogueo_id', fogueoId).order('created_at')
@@ -209,16 +285,11 @@ export default function BracketPage() {
                 const groups = buildPyramidGroups(pyrs)
                 setPyramidGroups(groups)
                 setActiveGroupId(groups[0]?.groupId ?? null)
-                // Cargar matches de todos
-                for (const p of pyrs) {
-                    await loadMatchesForPyramid(p.id)
-                }
+                for (const p of pyrs) await loadMatchesForPyramid(p.id)
             }
 
-            // Cargar clubes disponibles e inscritos
             const { data: fc } = await supabase
-                .from('fogueo_clubs')
-                .select('*, clubs(id, name, city, logo_url)')
+                .from('fogueo_clubs').select('*, clubs(id, name, city, logo_url)')
                 .eq('fogueo_id', fogueoId)
             if (fc) setJoinedClubs(fc)
 
@@ -231,14 +302,15 @@ export default function BracketPage() {
         load()
     }, [fogueoId])
 
+    // ── Pyramid group builder ────────────────────────────────────────────────
+
     const buildPyramidGroups = (pyrs: Pyramid[]): PyramidGroup[] => {
         const groups: PyramidGroup[] = []
         const processed = new Set<string>()
 
-        pyrs.forEach((p, idx) => {
+        pyrs.forEach(p => {
             if (processed.has(p.id)) return
             if (p.parent_group_id) {
-                // Es parte de un grupo de género
                 if (!groups.find(g => g.groupId === p.parent_group_id)) {
                     const siblings = pyrs.filter(s => s.parent_group_id === p.parent_group_id)
                     siblings.forEach(s => processed.add(s.id))
@@ -262,26 +334,28 @@ export default function BracketPage() {
         return groups
     }
 
+    // ── Match loader ─────────────────────────────────────────────────────────
+
     const loadMatchesForPyramid = async (pyramidId: string) => {
         const { data } = await supabase
             .from('fogueo_matches').select('*')
             .eq('pyramid_id', pyramidId)
             .order('global_match_number')
-        if (data) {
-            setMatchesByPyramid(prev => ({ ...prev, [pyramidId]: data }))
-        }
+        if (data) setMatchesByPyramid(prev => ({ ...prev, [pyramidId]: data }))
     }
 
-    const getAthleteById = (id: string | null) => {
+    // ── Helpers ──────────────────────────────────────────────────────────────
+
+    const getAthleteById = (id: string | null): Athlete | null => {
         if (!id) return null
         return allAthletes.find(a => a.id === id) ?? null
     }
 
     const sortAthletes = (athletes: Athlete[], mode: string): Athlete[] => {
-        const sorted = [...athletes]
+        const s = [...athletes]
         switch (mode) {
             case 'level_gender_weight':
-                return sorted.sort((a, b) => {
+                return s.sort((a, b) => {
                     const la = (a.belt_levels as any)?.sort_order ?? 0
                     const lb = (b.belt_levels as any)?.sort_order ?? 0
                     if (la !== lb) return la - lb
@@ -289,20 +363,70 @@ export default function BracketPage() {
                     return (a.training_weight ?? 0) - (b.training_weight ?? 0)
                 })
             case 'level_gender':
-                return sorted.sort((a, b) => {
+                return s.sort((a, b) => {
                     const la = (a.belt_levels as any)?.sort_order ?? 0
                     const lb = (b.belt_levels as any)?.sort_order ?? 0
                     if (la !== lb) return la - lb
                     return a.gender.localeCompare(b.gender)
                 })
             case 'gender_only':
-                return sorted.sort((a, b) => a.gender.localeCompare(b.gender))
+                return s.sort((a, b) => a.gender.localeCompare(b.gender))
             case 'age_only':
-                return sorted.sort((a, b) => calculateAge(a.birth_date) - calculateAge(b.birth_date))
+                return s.sort((a, b) => calculateAge(a.birth_date) - calculateAge(b.birth_date))
             default:
-                return sorted.sort(() => Math.random() - 0.5)
+                return s.sort(() => Math.random() - 0.5)
         }
     }
+
+    const getRoundName = (round: number, totalRounds: number) => {
+        if (round === totalRounds) return 'Final'
+        if (round === totalRounds - 1) return 'Semifinal'
+        if (round === totalRounds - 2) return 'Cuartos'
+        if (round === totalRounds - 3) return 'Octavos'
+        return `Ronda ${round}`
+    }
+
+    // ── Advance winner ───────────────────────────────────────────────────────
+
+    const advanceWinnerDB = async (
+        pyramidId: string,
+        currentRound: number,
+        currentMatchNum: number,
+        winnerId: string
+    ) => {
+        let nextRound: number
+        let nextMatchNum: number
+        let isBlueInNext: boolean
+
+        if (currentRound === 0) {
+            // Pre-match k feeds R1 match k, always as blue
+            nextRound = 1
+            nextMatchNum = currentMatchNum
+            isBlueInNext = true
+        } else {
+            nextRound = currentRound + 1
+            nextMatchNum = Math.ceil(currentMatchNum / 2)
+            isBlueInNext = currentMatchNum % 2 !== 0
+        }
+
+        const { data: nextMatch } = await supabase
+            .from('fogueo_matches')
+            .select('*')
+            .eq('pyramid_id', pyramidId)
+            .eq('round_number', nextRound)
+            .eq('match_number', nextMatchNum)
+            .maybeSingle()
+
+        if (!nextMatch) return
+
+        const update = isBlueInNext
+            ? { athlete_blue_id: winnerId }
+            : { athlete_red_id: winnerId }
+
+        await supabase.from('fogueo_matches').update(update).eq('id', nextMatch.id)
+    }
+
+    // ── Bracket generation ───────────────────────────────────────────────────
 
     const createSingleBracket = async (
         athletes: Athlete[],
@@ -311,7 +435,16 @@ export default function BracketPage() {
         genderGroup: string | null,
         parentGroupId: string | null,
     ): Promise<Pyramid | null> => {
-        const subtitle = generateSubtitle(mode, athletes)
+        const config = getBracketConfig(athletes.length)
+        const { bracketSize, preMatchCount, useOutbracket } = config
+
+        const totalRealMatches = athletes.length - 1
+        const sortDesc = generateSubtitle(mode, athletes)
+        const preMatchStr = preMatchCount > 0
+            ? ` · ${preMatchCount} pre-match${preMatchCount !== 1 ? 'es' : ''}`
+            : ''
+        const subtitle = `${athletes.length} atletas${preMatchStr} · Match 1–${totalRealMatches}${sortDesc ? ' · ' + sortDesc : ''}`
+
         const { data: pyramid, error } = await supabase
             .from('fogueo_pyramids').insert({
                 fogueo_id: fogueoId,
@@ -321,62 +454,37 @@ export default function BracketPage() {
                 subtitle,
                 gender_group: genderGroup,
                 parent_group_id: parentGroupId,
+                has_pre_match: preMatchCount > 0,
+                pre_match_count: preMatchCount,
             }).select().single()
 
         if (error || !pyramid) return null
 
-        const total = athletes.length
-        const bracketSize = nextPowerOf2(total)
-        const rounds = Math.log2(bracketSize)
-
-        // Distribuir atletas en slots con BYEs balanceados
-        const slots: (Athlete | null)[] = new Array(bracketSize).fill(null)
-        for (let i = 0; i < total; i++) slots[i] = athletes[i]
-
-        // Interleave BYEs — distribuirlos al final del bracket
-        const finalSlots: (Athlete | null)[] = []
-        for (let i = 0; i < bracketSize; i += 2) {
-            finalSlots.push(slots[i] ?? null)
-            finalSlots.push(slots[i + 1] ?? null)
-        }
-
         const matchesToCreate: any[] = []
-        let matchCounter = 1
+        let globalCounter = 1
+        let displayCounter = 1
 
-        // Ronda 1
-        const round1: any[] = []
-        for (let i = 0; i < bracketSize; i += 2) {
-            const blue = finalSlots[i]
-            const red = finalSlots[i + 1]
-            const isBye = !blue || !red
-            round1.push({
-                pyramid_id: pyramid.id,
-                round_number: 1,
-                match_number: Math.floor(i / 2) + 1,
-                global_match_number: matchCounter++,
-                athlete_blue_id: blue?.id ?? null,
-                athlete_red_id: red?.id ?? null,
-                winner_id: isBye ? (blue?.id ?? red?.id ?? null) : null,
-                status: isBye ? 'finished' : 'pending',
-                score_blue: 0,
-                score_red: 0,
-                is_bye: isBye,
-            })
-        }
-        matchesToCreate.push(...round1)
+        if (useOutbracket) {
+            // ── Outbracket path ──────────────────────────────────────────────
+            // directCount athletes go straight into the main bracket.
+            // preMatchCount * 2 athletes play pre-matches; their winners take
+            // the blue slot of R1 matches 1..preMatchCount.
+            const directCount = athletes.length - preMatchCount * 2
+            const rounds = Math.log2(bracketSize)
 
-        // Rounds siguientes
-        let prevCount = bracketSize / 2
-        for (let r = 2; r <= rounds; r++) {
-            const count = prevCount / 2
-            for (let m = 1; m <= count; m++) {
+            // Pre-matches (round_number=0, is_pre_match=true, display_number=null)
+            for (let k = 1; k <= preMatchCount; k++) {
+                const blueIdx = directCount + 2 * (k - 1)
+                const redIdx = blueIdx + 1
                 matchesToCreate.push({
                     pyramid_id: pyramid.id,
-                    round_number: r,
-                    match_number: m,
-                    global_match_number: matchCounter++,
-                    athlete_blue_id: null,
-                    athlete_red_id: null,
+                    round_number: 0,
+                    match_number: k,
+                    global_match_number: globalCounter++,
+                    display_number: null,
+                    is_pre_match: true,
+                    athlete_blue_id: athletes[blueIdx]?.id ?? null,
+                    athlete_red_id: athletes[redIdx]?.id ?? null,
                     winner_id: null,
                     status: 'pending',
                     score_blue: 0,
@@ -384,57 +492,137 @@ export default function BracketPage() {
                     is_bye: false,
                 })
             }
-            prevCount = count
-        }
 
-        await supabase.from('fogueo_matches').insert(matchesToCreate)
+            // R1 matches
+            const r1MatchCount = bracketSize / 2
+            for (let k = 1; k <= r1MatchCount; k++) {
+                if (k <= preMatchCount) {
+                    // Blue slot reserved for pre-match winner; red = direct athlete k-1
+                    matchesToCreate.push({
+                        pyramid_id: pyramid.id,
+                        round_number: 1,
+                        match_number: k,
+                        global_match_number: globalCounter++,
+                        display_number: displayCounter++,
+                        is_pre_match: false,
+                        athlete_blue_id: null,
+                        athlete_red_id: athletes[k - 1]?.id ?? null,
+                        winner_id: null,
+                        status: 'pending',
+                        score_blue: 0,
+                        score_red: 0,
+                        is_bye: false,
+                    })
+                } else {
+                    // Direct match: pair athletes from the direct pool
+                    const offset = preMatchCount + 2 * (k - preMatchCount - 1)
+                    matchesToCreate.push({
+                        pyramid_id: pyramid.id,
+                        round_number: 1,
+                        match_number: k,
+                        global_match_number: globalCounter++,
+                        display_number: displayCounter++,
+                        is_pre_match: false,
+                        athlete_blue_id: athletes[offset]?.id ?? null,
+                        athlete_red_id: athletes[offset + 1]?.id ?? null,
+                        winner_id: null,
+                        status: 'pending',
+                        score_blue: 0,
+                        score_red: 0,
+                        is_bye: false,
+                    })
+                }
+            }
 
-        // Avanzar BYEs automáticamente
-        for (const m of round1) {
-            if (m.is_bye && m.winner_id) {
-                await advanceWinnerDB(pyramid.id, 1, m.match_number, m.winner_id)
+            // Rounds 2+ (all real matches)
+            let prevCount = bracketSize / 2
+            for (let r = 2; r <= rounds; r++) {
+                const count = prevCount / 2
+                for (let m = 1; m <= count; m++) {
+                    matchesToCreate.push({
+                        pyramid_id: pyramid.id,
+                        round_number: r,
+                        match_number: m,
+                        global_match_number: globalCounter++,
+                        display_number: displayCounter++,
+                        is_pre_match: false,
+                        athlete_blue_id: null,
+                        athlete_red_id: null,
+                        winner_id: null,
+                        status: 'pending',
+                        score_blue: 0,
+                        score_red: 0,
+                        is_bye: false,
+                    })
+                }
+                prevCount = count
+            }
+
+            await supabase.from('fogueo_matches').insert(matchesToCreate)
+
+        } else {
+            // ── Standard BYE path ────────────────────────────────────────────
+            const rounds = Math.log2(bracketSize)
+            const slots: (Athlete | null)[] = new Array(bracketSize).fill(null)
+            for (let i = 0; i < athletes.length; i++) slots[i] = athletes[i]
+
+            const round1: any[] = []
+            for (let i = 0; i < bracketSize; i += 2) {
+                const blue = slots[i] ?? null
+                const red = slots[i + 1] ?? null
+                const isBye = !blue || !red
+                round1.push({
+                    pyramid_id: pyramid.id,
+                    round_number: 1,
+                    match_number: Math.floor(i / 2) + 1,
+                    global_match_number: globalCounter++,
+                    display_number: isBye ? null : displayCounter++,
+                    is_pre_match: false,
+                    athlete_blue_id: blue?.id ?? null,
+                    athlete_red_id: red?.id ?? null,
+                    winner_id: isBye ? (blue?.id ?? red?.id ?? null) : null,
+                    status: isBye ? 'finished' : 'pending',
+                    score_blue: 0,
+                    score_red: 0,
+                    is_bye: isBye,
+                })
+            }
+            matchesToCreate.push(...round1)
+
+            let prevCount = bracketSize / 2
+            for (let r = 2; r <= rounds; r++) {
+                const count = prevCount / 2
+                for (let m = 1; m <= count; m++) {
+                    matchesToCreate.push({
+                        pyramid_id: pyramid.id,
+                        round_number: r,
+                        match_number: m,
+                        global_match_number: globalCounter++,
+                        display_number: displayCounter++,
+                        is_pre_match: false,
+                        athlete_blue_id: null,
+                        athlete_red_id: null,
+                        winner_id: null,
+                        status: 'pending',
+                        score_blue: 0,
+                        score_red: 0,
+                        is_bye: false,
+                    })
+                }
+                prevCount = count
+            }
+
+            await supabase.from('fogueo_matches').insert(matchesToCreate)
+
+            // Advance BYE winners so later slots are pre-populated
+            for (const m of round1) {
+                if (m.is_bye && m.winner_id) {
+                    await advanceWinnerDB(pyramid.id, 1, m.match_number, m.winner_id)
+                }
             }
         }
 
         return pyramid
-    }
-
-    const advanceWinnerDB = async (
-        pyramidId: string,
-        currentRound: number,
-        currentMatchNum: number,
-        winnerId: string
-    ) => {
-        const nextRound = currentRound + 1
-        const nextMatchNum = Math.ceil(currentMatchNum / 2)
-        const isBlueInNext = currentMatchNum % 2 !== 0
-
-        const { data: nextMatch } = await supabase
-            .from('fogueo_matches')
-            .select('*')
-            .eq('pyramid_id', pyramidId)
-            .eq('round_number', nextRound)
-            .eq('match_number', nextMatchNum)
-            .single()
-
-        if (!nextMatch) return
-
-        const update = isBlueInNext
-            ? { athlete_blue_id: winnerId }
-            : { athlete_red_id: winnerId }
-
-        await supabase.from('fogueo_matches').update(update).eq('id', nextMatch.id)
-
-        // Si el otro lado ya tiene atleta verificar si es BYE
-        const otherSide = isBlueInNext ? nextMatch.athlete_red_id : nextMatch.athlete_blue_id
-        if (!otherSide) return
-
-        // Ambos lados tienen atleta — si uno es BYE avanzar
-        const updatedBlue = isBlueInNext ? winnerId : nextMatch.athlete_blue_id
-        const updatedRed = isBlueInNext ? nextMatch.athlete_red_id : winnerId
-        if (updatedBlue && updatedRed) {
-            // Match completo — no es BYE, esperar resultado
-        }
     }
 
     const generateBracket = useCallback(async () => {
@@ -449,7 +637,6 @@ export default function BracketPage() {
             const fogueoNum = pyramidGroups.length + 1
 
             if (sortMode === 'gender_only') {
-                // Crear DOS pirámides separadas
                 const males = sortAthletes(athletes.filter(a => a.gender === 'M'), sortMode)
                 const females = sortAthletes(athletes.filter(a => a.gender === 'F'), sortMode)
 
@@ -463,25 +650,17 @@ export default function BracketPage() {
                 const newPyramids: Pyramid[] = []
 
                 if (males.length >= 2) {
-                    const p = await createSingleBracket(
-                        males, sortMode,
-                        `Fogueo ${fogueoNum} — Masculino`,
-                        'M', groupId
-                    )
-                    if (p) newPyramids.push({ ...p, subtitle: generateSubtitle(sortMode, males) })
+                    const p = await createSingleBracket(males, sortMode, `Fogueo ${fogueoNum} — Masculino`, 'M', groupId)
+                    if (p) newPyramids.push(p)
                 } else if (males.length === 1) {
-                    toast.warning(`Solo hay 1 atleta masculino — se necesitan al menos 2`)
+                    toast.warning('Solo hay 1 atleta masculino — se necesitan al menos 2')
                 }
 
                 if (females.length >= 2) {
-                    const p = await createSingleBracket(
-                        females, sortMode,
-                        `Fogueo ${fogueoNum} — Femenino`,
-                        'F', groupId
-                    )
-                    if (p) newPyramids.push({ ...p, subtitle: generateSubtitle(sortMode, females) })
+                    const p = await createSingleBracket(females, sortMode, `Fogueo ${fogueoNum} — Femenino`, 'F', groupId)
+                    if (p) newPyramids.push(p)
                 } else if (females.length === 1) {
-                    toast.warning(`Solo hay 1 atleta femenina — se necesitan al menos 2`)
+                    toast.warning('Solo hay 1 atleta femenina — se necesitan al menos 2')
                 }
 
                 if (newPyramids.length > 0) {
@@ -493,28 +672,25 @@ export default function BracketPage() {
                         return updated
                     })
                     for (const p of newPyramids) await loadMatchesForPyramid(p.id)
-                    toast.success(`Fogueo ${fogueoNum} creado: ${males.length > 0 ? males.length + ' masculinos' : ''} ${females.length > 0 ? '· ' + females.length + ' femeninas' : ''}`)
+                    const mPart = males.length >= 2 ? `${males.length}M` : ''
+                    const fPart = females.length >= 2 ? `${females.length}F` : ''
+                    toast.success(`Fogueo ${fogueoNum} creado: ${[mPart, fPart].filter(Boolean).join(' · ')}`)
                 }
             } else {
-                // Una sola pirámide
                 const sorted = sortAthletes(athletes, sortMode)
-                const p = await createSingleBracket(
-                    sorted, sortMode,
-                    `Fogueo ${fogueoNum}`,
-                    null, null
-                )
+                const p = await createSingleBracket(sorted, sortMode, `Fogueo ${fogueoNum}`, null, null)
                 if (p) {
-                    const newP = { ...p, subtitle: generateSubtitle(sortMode, sorted) }
                     setPyramids(prev => {
-                        const updated = [...prev, newP]
+                        const updated = [...prev, p]
                         const groups = buildPyramidGroups(updated)
                         setPyramidGroups(groups)
                         setActiveGroupId(p.id)
                         return updated
                     })
                     await loadMatchesForPyramid(p.id)
-                    const byeCount = nextPowerOf2(sorted.length) - sorted.length
-                    toast.success(`Fogueo ${fogueoNum} generado · ${byeCount > 0 ? byeCount + ' BYE(s) · ' : ''}Match 1–${sorted.length - 1}`)
+                    const cfg = getBracketConfig(sorted.length)
+                    const preStr = cfg.useOutbracket ? ` · ${cfg.preMatchCount} pre-match${cfg.preMatchCount !== 1 ? 'es' : ''}` : ''
+                    toast.success(`Fogueo ${fogueoNum} generado · ${sorted.length} atletas${preStr}`)
                 }
             }
 
@@ -528,7 +704,14 @@ export default function BracketPage() {
         }
     }, [selectedAthletes, sortMode, allAthletes, pyramidGroups])
 
-    const updateMatchWinner = async (match: Match, pyramidId: string, winnerId: string, isBlue: boolean) => {
+    // ── Mark winner ──────────────────────────────────────────────────────────
+
+    const updateMatchWinner = async (
+        match: Match,
+        pyramidId: string,
+        winnerId: string,
+        isBlue: boolean,
+    ) => {
         if (match.is_bye) return
 
         const { error } = await supabase
@@ -543,51 +726,39 @@ export default function BracketPage() {
 
         if (error) { toast.error('Error al guardar el resultado'); return }
 
-        // Actualizar estado local
         setMatchesByPyramid(prev => ({
             ...prev,
             [pyramidId]: prev[pyramidId].map(m =>
                 m.id === match.id
                     ? { ...m, winner_id: winnerId, status: 'finished', score_blue: isBlue ? 1 : 0, score_red: isBlue ? 0 : 1 }
                     : m
-            )
+            ),
         }))
 
-        // Avanzar ganador
         await advanceWinnerDB(pyramidId, match.round_number, match.match_number, winnerId)
         await loadMatchesForPyramid(pyramidId)
-        toast.success(`Match ${match.global_match_number} · Ganador registrado ✓`)
+
+        const label = match.is_pre_match ? 'Pre-match' : `Match ${match.display_number}`
+        toast.success(`${label} · Ganador registrado ✓`)
     }
+
+    // ── Join fogueo ──────────────────────────────────────────────────────────
 
     const joinFogueo = async () => {
         if (!clubId) return
-        const already = joinedClubs.find(fc => fc.club_id === clubId)
-        if (already) { toast.warning('Tu club ya está inscrito en este fogueo'); return }
-
+        if (joinedClubs.some(fc => fc.club_id === clubId)) {
+            toast.warning('Tu club ya está inscrito en este fogueo')
+            return
+        }
         const { error } = await supabase.from('fogueo_clubs').insert({
             fogueo_id: fogueoId,
             club_id: clubId,
             status: 'confirmed',
         })
-
         if (!error) {
-            toast.success('¡Te uniste al fogueo! El organizador fue notificado.')
-            // Enviar email al organizador
-            if (fogueo?.clubs?.email) {
-                await fetch('/api/email', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        type: 'club_joined',
-                        to: fogueo.clubs.email,
-                        clubName: 'Tu club',
-                        fogueoName: fogueo.name,
-                    }),
-                })
-            }
+            toast.success('¡Te uniste al fogueo!')
             const { data: fc } = await supabase
-                .from('fogueo_clubs')
-                .select('*, clubs(id, name, city, logo_url)')
+                .from('fogueo_clubs').select('*, clubs(id, name, city, logo_url)')
                 .eq('fogueo_id', fogueoId)
             if (fc) setJoinedClubs(fc)
         } else {
@@ -595,13 +766,7 @@ export default function BracketPage() {
         }
     }
 
-    const getRoundName = (round: number, totalRounds: number) => {
-        if (round === totalRounds) return 'Final'
-        if (round === totalRounds - 1) return 'Semifinal'
-        if (round === totalRounds - 2) return 'Cuartos'
-        if (round === totalRounds - 3) return 'Octavos'
-        return `Ronda ${round}`
-    }
+    // ── Derived ──────────────────────────────────────────────────────────────
 
     const activeGroup = pyramidGroups.find(g => g.groupId === activeGroupId)
     const isJoined = joinedClubs.some(fc => fc.club_id === clubId)
@@ -612,135 +777,238 @@ export default function BracketPage() {
     })
 
     const filteredClubs = availableClubs.filter(c => {
-        const joined = joinedClubs.some(fc => fc.club_id === c.id)
-        if (joined) return false
+        if (joinedClubs.some(fc => fc.club_id === c.id)) return false
         if (!clubFilter) return true
         return c.name.toLowerCase().includes(clubFilter.toLowerCase()) ||
             c.city.toLowerCase().includes(clubFilter.toLowerCase())
     })
 
-    const previewSize = nextPowerOf2(selectedAthletes.length)
-    const previewByes = previewSize - selectedAthletes.length
-    const previewMatches = previewSize - 1
+    const previewConfig = selectedAthletes.length >= 2
+        ? getBracketConfig(selectedAthletes.length)
+        : null
+    const previewMatches = Math.max(0, selectedAthletes.length - 1)
 
-    const BracketView = ({ pyramid }: { pyramid: Pyramid }) => {
-        const matches = matchesByPyramid[pyramid.id] ?? []
-        const rounds = [...new Set(matches.map(m => m.round_number))].sort((a, b) => a - b)
-        const totalRounds = rounds.length
-        const genderLabel = pyramid.gender_group === 'M' ? 'Masculino' : pyramid.gender_group === 'F' ? 'Femenino' : null
+    // ── Match card renderer (shared by pre-match and main bracket) ───────────
+
+    const MatchCard = ({ match, pyramidId, isPreMatch = false }: {
+        match: Match
+        pyramidId: string
+        isPreMatch?: boolean
+    }) => {
+        const blue = getAthleteById(match.athlete_blue_id)
+        const red = getAthleteById(match.athlete_red_id)
+        const blueWon = match.winner_id != null && match.winner_id === match.athlete_blue_id
+        const redWon = match.winner_id != null && match.winner_id === match.athlete_red_id
 
         return (
-            <div className={`mb-6 ${pyramid.gender_group ? 'border border-[#1e1e2e] rounded-2xl p-4' : ''}`}>
-                {genderLabel && (
-                    <div className={`inline-flex items-center gap-2 px-3 py-1.5 rounded-xl text-xs font-medium mb-4 ${pyramid.gender_group === 'M'
-                        ? 'bg-blue-900/30 text-blue-400 border border-blue-900/40'
-                        : 'bg-pink-900/30 text-pink-400 border border-pink-900/40'
-                        }`}>
-                        {genderLabel} · {matches.filter(m => !m.is_bye && m.round_number === 1).length + matches.filter(m => m.is_bye).length} atletas · Match {matches[0]?.global_match_number}–{matches[matches.length - 1]?.global_match_number}
-                    </div>
-                )}
+            <div className="bg-[#0d0d1a] border border-[#1e1e2e] rounded-xl overflow-hidden" style={{ minWidth: '185px' }}>
+                <div className="flex items-center justify-between px-2.5 py-1.5 border-b border-[#1e1e2e]"
+                    style={{ background: isPreMatch ? '#2a1800' : '#13131f' }}>
+                    <span className="text-xs font-bold"
+                        style={{ color: isPreMatch ? '#F59E0B' : '#BA7517' }}>
+                        {isPreMatch ? `Pre-match ${match.match_number}` : `Match ${match.display_number}`}
+                    </span>
+                    <span className={`text-xs px-1.5 py-0.5 rounded ${match.status === 'finished'
+                        ? 'bg-green-900/40 text-green-400'
+                        : 'text-gray-600'}`}>
+                        {match.status === 'finished' ? '✓ Finalizado' : 'Pendiente'}
+                    </span>
+                </div>
 
-                {matches.length === 0 ? (
-                    <div className="text-center py-6 text-gray-500 text-sm">Sin matches generados</div>
-                ) : (
-                    <div className="flex gap-3 overflow-x-auto pb-4">
-                        {rounds.map(round => (
-                            <div key={round} className="flex-shrink-0" style={{ minWidth: '185px' }}>
-                                <div className="flex items-center justify-between text-xs text-gray-500 uppercase tracking-wider mb-3 px-1">
-                                    <span>{getRoundName(round, totalRounds)}</span>
-                                    <span className="text-gray-600">{matches.filter(m => m.round_number === round && !m.is_bye).length}c</span>
-                                </div>
-                                <div className="space-y-2">
-                                    {matches.filter(m => m.round_number === round).map(match => {
-                                        const blue = getAthleteById(match.athlete_blue_id)
-                                        const red = getAthleteById(match.athlete_red_id)
-                                        const blueWon = match.winner_id === match.athlete_blue_id
-                                        const redWon = match.winner_id === match.athlete_red_id
-
-                                        if (match.is_bye) {
-                                            const byeAthlete = blue ?? red
-                                            return (
-                                                <div key={match.id} className="bg-[#0d0d1a] border border-dashed border-[#2e2e3e] rounded-xl p-2.5 opacity-60">
-                                                    <div className="flex items-center justify-between mb-1">
-                                                        <span className="text-xs font-medium text-gray-600">BYE</span>
-                                                        <span className="text-xs text-gray-700">M{match.global_match_number}</span>
-                                                    </div>
-                                                    {byeAthlete && (
-                                                        <div className="text-xs text-gray-400">{byeAthlete.first_name} {byeAthlete.last_name[0]}. avanza →</div>
-                                                    )}
-                                                </div>
-                                            )
-                                        }
-
-                                        return (
-                                            <div key={match.id} className="bg-[#0d0d1a] border border-[#1e1e2e] rounded-xl overflow-hidden">
-                                                <div className="flex items-center justify-between px-2.5 py-1.5 bg-[#13131f] border-b border-[#1e1e2e]">
-                                                    <span className="text-xs font-bold text-yellow-400">Match {match.global_match_number}</span>
-                                                    <span className={`text-xs px-1.5 py-0.5 rounded ${match.status === 'finished' ? 'bg-green-900/40 text-green-400' : 'text-gray-600'
-                                                        }`}>
-                                                        {match.status === 'finished' ? '✓ Finalizado' : 'Pendiente'}
-                                                    </span>
-                                                </div>
-                                                <div
-                                                    className={`flex items-center gap-2 px-3 py-2 border-b border-[#1e1e2e] transition ${isOrganizer && blue && match.status !== 'finished' ? 'cursor-pointer hover:bg-blue-900/30' : ''
-                                                        } ${blueWon ? 'bg-blue-900/40' : 'bg-[#0d1220]'}`}
-                                                    onClick={() => isOrganizer && blue && match.status !== 'finished' && updateMatchWinner(match, pyramid.id, blue.id, true)}
-                                                >
-                                                    <div className="w-2 h-2 rounded-full bg-blue-500 flex-shrink-0"></div>
-                                                    <div className="flex-1 min-w-0">
-                                                        <div className={`text-xs truncate ${blueWon ? 'text-blue-300 font-medium' : 'text-gray-300'}`}>
-                                                            {blue ? `${blue.first_name} ${blue.last_name[0]}.` : 'Por definir'}
-                                                        </div>
-                                                        {blue && <div className="text-xs text-gray-600 truncate">{blue.club_name} · {blue.training_weight ? `${blue.training_weight}kg` : '—'}</div>}
-                                                    </div>
-                                                    {blueWon && <span className="text-blue-400 text-xs">✓</span>}
-                                                </div>
-                                                <div
-                                                    className={`flex items-center gap-2 px-3 py-2 transition ${isOrganizer && red && match.status !== 'finished' ? 'cursor-pointer hover:bg-red-900/30' : ''
-                                                        } ${redWon ? 'bg-red-900/40' : 'bg-[#1a0d0d]'}`}
-                                                    onClick={() => isOrganizer && red && match.status !== 'finished' && updateMatchWinner(match, pyramid.id, red.id, false)}
-                                                >
-                                                    <div className="w-2 h-2 rounded-full bg-red-500 flex-shrink-0"></div>
-                                                    <div className="flex-1 min-w-0">
-                                                        <div className={`text-xs truncate ${redWon ? 'text-red-300 font-medium' : 'text-gray-300'}`}>
-                                                            {red ? `${red.first_name} ${red.last_name[0]}.` : 'Por definir'}
-                                                        </div>
-                                                        {red && <div className="text-xs text-gray-600 truncate">{red.club_name} · {red.training_weight ? `${red.training_weight}kg` : '—'}</div>}
-                                                    </div>
-                                                    {redWon && <span className="text-red-400 text-xs">✓</span>}
-                                                </div>
-                                            </div>
-                                        )
-                                    })}
-                                </div>
-                            </div>
-                        ))}
-
-                        {matches.some(m => m.winner_id && m.round_number === totalRounds && !m.is_bye) && (
-                            <div className="flex-shrink-0" style={{ minWidth: '130px' }}>
-                                <div className="text-xs text-yellow-400 uppercase tracking-wider mb-3 px-1">
-                                    {pyramid.gender_group === 'M' ? 'Campeón M' : pyramid.gender_group === 'F' ? 'Campeona F' : 'Campeón'}
-                                </div>
-                                <div className="bg-yellow-900/20 border border-yellow-900/40 rounded-xl p-4 text-center">
-                                    {(() => {
-                                        const finalMatch = matches.find(m => m.round_number === totalRounds && !m.is_bye)
-                                        const champ = getAthleteById(finalMatch?.winner_id ?? null)
-                                        return champ ? (
-                                            <>
-                                                <div className="text-xl mb-2">🏆</div>
-                                                <div className="text-xs font-medium text-yellow-400">{champ.first_name} {champ.last_name}</div>
-                                                <div className="text-xs text-gray-500 mt-1">{champ.club_name}</div>
-                                            </>
-                                        ) : <div className="text-xs text-gray-600 py-2">Por definir</div>
-                                    })()}
-                                </div>
+                {/* Blue */}
+                <div
+                    className={`flex items-center gap-2 px-3 py-2 border-b border-[#1e1e2e] transition ${isOrganizer && blue && match.status !== 'finished' ? 'cursor-pointer hover:bg-blue-900/30' : ''}`}
+                    style={{ background: blueWon ? '#1e3a5f' : '#0d1220' }}
+                    onClick={() => isOrganizer && blue && match.status !== 'finished' && updateMatchWinner(match, pyramidId, blue.id, true)}
+                >
+                    <div className="w-2 h-2 rounded-full bg-blue-500 flex-shrink-0" />
+                    <div className="flex-1 min-w-0">
+                        <div className="text-xs truncate" style={{ color: blueWon ? '#93c5fd' : '#d1d5db', fontWeight: blueWon ? 600 : 400 }}>
+                            {blue ? `${blue.first_name} ${blue.last_name[0]}.` : 'Por definir'}
+                        </div>
+                        {blue && (
+                            <div className="text-xs text-gray-600 truncate">
+                                {blue.club_name}{blue.training_weight ? ` · ${blue.training_weight}kg` : ''}
                             </div>
                         )}
                     </div>
+                    {blueWon && <span className="text-xs flex-shrink-0" style={{ color: '#93c5fd' }}>✓</span>}
+                </div>
+
+                {/* Red */}
+                <div
+                    className={`flex items-center gap-2 px-3 py-2 transition ${isOrganizer && red && match.status !== 'finished' ? 'cursor-pointer hover:bg-red-900/30' : ''}`}
+                    style={{ background: redWon ? '#3a1a1a' : '#1a0d0d' }}
+                    onClick={() => isOrganizer && red && match.status !== 'finished' && updateMatchWinner(match, pyramidId, red.id, false)}
+                >
+                    <div className="w-2 h-2 rounded-full bg-red-500 flex-shrink-0" />
+                    <div className="flex-1 min-w-0">
+                        <div className="text-xs truncate" style={{ color: redWon ? '#fca5a5' : '#d1d5db', fontWeight: redWon ? 600 : 400 }}>
+                            {red ? `${red.first_name} ${red.last_name[0]}.` : 'Por definir'}
+                        </div>
+                        {red && (
+                            <div className="text-xs text-gray-600 truncate">
+                                {red.club_name}{red.training_weight ? ` · ${red.training_weight}kg` : ''}
+                            </div>
+                        )}
+                    </div>
+                    {redWon && <span className="text-xs flex-shrink-0" style={{ color: '#fca5a5' }}>✓</span>}
+                </div>
+            </div>
+        )
+    }
+
+    // ── BracketView sub-component ────────────────────────────────────────────
+
+    const BracketView = ({ pyramid }: { pyramid: Pyramid }) => {
+        const allMatches = matchesByPyramid[pyramid.id] ?? []
+
+        // Pre-matches (round 0) always shown, never locked
+        const preMatches = allMatches.filter(m => m.round_number === 0)
+        // Main bracket matches (round >= 1) subject to progressive disclosure
+        const mainMatches = allMatches.filter(m => m.round_number >= 1)
+
+        const allMainRounds = [...new Set(mainMatches.map(m => m.round_number))].sort((a, b) => a - b)
+        const totalRounds = allMainRounds[allMainRounds.length - 1] ?? 1
+
+        const { visible: visibleRounds, nextLocked } = getVisibleRounds(mainMatches)
+
+        // Athlete count: unique IDs across pre-matches AND R1 of main bracket
+        const athleteIdsInPyramid = new Set<string>([
+            ...mainMatches.filter(m => m.round_number === 1 && m.athlete_blue_id != null).map(m => m.athlete_blue_id!),
+            ...mainMatches.filter(m => m.round_number === 1 && m.athlete_red_id != null).map(m => m.athlete_red_id!),
+            ...preMatches.filter(m => m.athlete_blue_id != null).map(m => m.athlete_blue_id!),
+            ...preMatches.filter(m => m.athlete_red_id != null).map(m => m.athlete_red_id!),
+        ])
+        const athleteCount = athleteIdsInPyramid.size
+
+        const maxDisplayNum = mainMatches
+            .filter(m => !m.is_bye && m.display_number != null)
+            .reduce((max, m) => Math.max(max, m.display_number!), 0)
+
+        const genderLabel = pyramid.gender_group === 'M'
+            ? 'Masculino'
+            : pyramid.gender_group === 'F'
+                ? 'Femenino'
+                : null
+
+        return (
+            <div className={`mb-6 ${pyramid.gender_group ? 'border border-[#1e1e2e] rounded-2xl p-4' : ''}`}>
+                {/* Gender header */}
+                {genderLabel && (
+                    <div
+                        className="flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-semibold mb-4"
+                        style={pyramid.gender_group === 'M'
+                            ? { background: '#0C2340', color: '#93c5fd', border: '1px solid #1e3a5f' }
+                            : { background: '#3a0e1a', color: '#f9a8d4', border: '1px solid #5f1e2e' }}
+                    >
+                        <span>{genderLabel}</span>
+                        <span className="opacity-50 font-normal">·</span>
+                        <span className="font-normal text-xs opacity-80">{athleteCount} atletas</span>
+                        {(pyramid.pre_match_count ?? 0) > 0 && (
+                            <>
+                                <span className="opacity-50 font-normal">·</span>
+                                <span className="font-normal text-xs" style={{ color: '#F59E0B', opacity: 0.9 }}>
+                                    {pyramid.pre_match_count} pre-match{pyramid.pre_match_count !== 1 ? 'es' : ''}
+                                </span>
+                            </>
+                        )}
+                        {maxDisplayNum > 0 && (
+                            <>
+                                <span className="opacity-50 font-normal">·</span>
+                                <span className="font-normal text-xs opacity-80">Match 1–{maxDisplayNum}</span>
+                            </>
+                        )}
+                    </div>
+                )}
+
+                {allMatches.length === 0 ? (
+                    <div className="text-center py-6 text-gray-500 text-sm">Sin matches generados</div>
+                ) : (
+                    <>
+                        {/* Pre-match section — amber, always visible */}
+                        {preMatches.length > 0 && (
+                            <div className="rounded-xl mb-4 p-4"
+                                style={{ background: '#1a1000', border: '1px solid #7a5c00' }}>
+                                <div className="flex items-center gap-2 mb-1">
+                                    <span className="text-xs font-semibold uppercase tracking-wider" style={{ color: '#F59E0B' }}>
+                                        Pre-match — Outbracket
+                                    </span>
+                                </div>
+                                <p className="text-xs mb-3" style={{ color: '#92400e' }}>
+                                    El ganador de cada pre-match entra al Match correspondiente como azul
+                                </p>
+                                <div className="flex gap-3 flex-wrap">
+                                    {preMatches.map(match => (
+                                        <MatchCard key={match.id} match={match} pyramidId={pyramid.id} isPreMatch />
+                                    ))}
+                                </div>
+                            </div>
+                        )}
+
+                        {/* Main bracket — progressive disclosure */}
+                        <div className="flex gap-3 overflow-x-auto pb-4">
+                            {visibleRounds.map(round => {
+                                const visibleMatches = mainMatches.filter(m => m.round_number === round && !m.is_bye)
+                                return (
+                                    <div key={round} className="flex-shrink-0" style={{ minWidth: '185px' }}>
+                                        <div className="flex items-center justify-between text-xs text-gray-500 uppercase tracking-wider mb-3 px-1">
+                                            <span>{getRoundName(round, totalRounds)}</span>
+                                            <span className="text-gray-600">{visibleMatches.length}c</span>
+                                        </div>
+                                        <div className="space-y-2">
+                                            {visibleMatches.map(match => (
+                                                <MatchCard key={match.id} match={match} pyramidId={pyramid.id} />
+                                            ))}
+                                        </div>
+                                    </div>
+                                )
+                            })}
+
+                            {/* Locked round placeholder */}
+                            {nextLocked !== null && (
+                                <div className="flex-shrink-0" style={{ minWidth: '185px' }}>
+                                    <div className="text-xs text-gray-500 uppercase tracking-wider mb-3 px-1">
+                                        {getRoundName(nextLocked, totalRounds)}
+                                    </div>
+                                    <div className="bg-[#13131f] border border-dashed border-[#2e2e3e] rounded-xl p-5 text-center">
+                                        <div className="text-gray-600 text-base mb-2">🔒</div>
+                                        <div className="text-gray-600 text-xs leading-relaxed">
+                                            Se desbloquea al terminar ronda anterior
+                                        </div>
+                                    </div>
+                                </div>
+                            )}
+
+                            {/* Champion column */}
+                            {mainMatches.some(m => m.winner_id && m.round_number === totalRounds && !m.is_bye) && (
+                                <div className="flex-shrink-0" style={{ minWidth: '130px' }}>
+                                    <div className="text-xs text-yellow-400 uppercase tracking-wider mb-3 px-1">
+                                        {pyramid.gender_group === 'M' ? 'Campeón M' : pyramid.gender_group === 'F' ? 'Campeona F' : 'Campeón'}
+                                    </div>
+                                    <div className="bg-yellow-900/20 border border-yellow-900/40 rounded-xl p-4 text-center">
+                                        {(() => {
+                                            const finalMatch = mainMatches.find(m => m.round_number === totalRounds && !m.is_bye)
+                                            const champ = getAthleteById(finalMatch?.winner_id ?? null)
+                                            return champ ? (
+                                                <>
+                                                    <div className="text-xl mb-2">🏆</div>
+                                                    <div className="text-xs font-medium text-yellow-400">{champ.first_name} {champ.last_name}</div>
+                                                    <div className="text-xs text-gray-500 mt-1">{champ.club_name}</div>
+                                                </>
+                                            ) : <div className="text-xs text-gray-600 py-2">Por definir</div>
+                                        })()}
+                                    </div>
+                                </div>
+                            )}
+                        </div>
+                    </>
                 )}
             </div>
         )
     }
+
+    // ── Render ───────────────────────────────────────────────────────────────
 
     if (loading) return (
         <div className="flex min-h-screen bg-[#07070f] text-white items-center justify-center">
@@ -765,7 +1033,9 @@ export default function BracketPage() {
                                     <span>›</span>
                                     <span className="text-white">Brackets</span>
                                 </div>
-                                <h1 className="text-xl font-bold"><span className="text-blue-500">TKD</span> — Brackets · {fogueo?.name}</h1>
+                                <h1 className="text-xl font-bold">
+                                    <span className="text-blue-500">TKD</span> — Brackets · {fogueo?.name}
+                                </h1>
                                 <p className="text-xs text-gray-500 mt-0.5">
                                     {allAthletes.length} atletas · {joinedClubs.length} clubes · {pyramidGroups.length} fogueo{pyramidGroups.length !== 1 ? 's' : ''}
                                 </p>
@@ -776,23 +1046,27 @@ export default function BracketPage() {
                                         ✓ Inscrito
                                     </span>
                                 )}
-                                {!isOrganizer && isJoined && (
-                                    <span className="text-xs px-3 py-2 rounded-xl bg-green-900/40 text-green-400 border border-green-900/40">✓ Inscrito</span>
+                                {!isOrganizer && !isJoined && (
+                                    <button onClick={joinFogueo}
+                                        className="text-xs px-3 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white transition">
+                                        Unirme al fogueo
+                                    </button>
                                 )}
                                 {isOrganizer && (
-                                    <button onClick={() => { setView('new_pyramid'); setSelectedAthletes([]) }} className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-xl text-sm font-medium transition">
+                                    <button
+                                        onClick={() => { setView('new_pyramid'); setSelectedAthletes([]) }}
+                                        className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-xl text-sm font-medium transition">
                                         + Nueva pirámide
                                     </button>
                                 )}
                             </div>
                         </div>
 
-                        {/* Vista bracket */}
+                        {/* Bracket view */}
                         {view === 'bracket' && (
                             <>
                                 {pyramidGroups.length > 0 ? (
                                     <>
-                                        {/* Tabs de grupos */}
                                         <div className="flex gap-2 flex-wrap mb-5">
                                             {pyramidGroups.map((group, i) => (
                                                 <button
@@ -800,8 +1074,7 @@ export default function BracketPage() {
                                                     onClick={() => setActiveGroupId(group.groupId)}
                                                     className={`text-left px-3 py-2 rounded-xl border transition ${activeGroupId === group.groupId
                                                         ? 'bg-blue-900/40 border-blue-500/50 text-blue-400'
-                                                        : 'bg-[#0d0d1a] border-[#1e1e2e] text-gray-400 hover:border-gray-500'
-                                                        }`}
+                                                        : 'bg-[#0d0d1a] border-[#1e1e2e] text-gray-400 hover:border-gray-500'}`}
                                                 >
                                                     <div className="text-xs font-medium">Fogueo {i + 1} · {SORT_MODE_LABELS[group.sortMode]}</div>
                                                     <div className="text-xs text-gray-500 mt-0.5 max-w-48 truncate">
@@ -812,14 +1085,12 @@ export default function BracketPage() {
                                             {isOrganizer && (
                                                 <button
                                                     onClick={() => { setView('new_pyramid'); setSelectedAthletes([]) }}
-                                                    className="px-3 py-2 rounded-xl border border-dashed border-[#2e2e3e] text-gray-600 hover:border-blue-500/50 hover:text-blue-400 transition text-xs"
-                                                >
+                                                    className="px-3 py-2 rounded-xl border border-dashed border-[#2e2e3e] text-gray-600 hover:border-blue-500/50 hover:text-blue-400 transition text-xs">
                                                     + Nueva
                                                 </button>
                                             )}
                                         </div>
 
-                                        {/* Contenido del grupo activo */}
                                         {activeGroup && (
                                             <div className="bg-[#0d0d1a] border border-[#1e1e2e] rounded-2xl p-5">
                                                 <div className="flex items-center gap-3 mb-4 flex-wrap">
@@ -831,7 +1102,9 @@ export default function BracketPage() {
                                                     </span>
                                                     <span className="text-xs text-gray-500">{activeGroup.pyramids[0]?.subtitle}</span>
                                                     <span className="ml-auto text-xs text-gray-600">
-                                                        {activeGroup.pyramids.reduce((sum, p) => sum + (matchesByPyramid[p.id]?.filter(m => !m.is_bye).length ?? 0), 0)} combates
+                                                        {activeGroup.pyramids.reduce((sum, p) =>
+                                                            sum + (matchesByPyramid[p.id]?.filter(m => !m.is_bye && !m.is_pre_match).length ?? 0), 0
+                                                        )} combates
                                                     </span>
                                                 </div>
 
@@ -840,9 +1113,15 @@ export default function BracketPage() {
                                                 ))}
 
                                                 <div className="flex items-center gap-4 text-xs text-gray-500 flex-wrap pt-3 border-t border-[#1e1e2e]">
-                                                    <div className="flex items-center gap-1.5"><div className="w-2 h-2 rounded-full bg-blue-500"></div>Azul (arriba)</div>
-                                                    <div className="flex items-center gap-1.5"><div className="w-2 h-2 rounded-full bg-red-500"></div>Rojo (abajo)</div>
-                                                    <div className="flex items-center gap-1.5"><div className="w-2 h-2 rounded-full bg-yellow-500"></div>Número de match</div>
+                                                    <div className="flex items-center gap-1.5">
+                                                        <div className="w-2 h-2 rounded-full bg-blue-500" />Azul (arriba)
+                                                    </div>
+                                                    <div className="flex items-center gap-1.5">
+                                                        <div className="w-2 h-2 rounded-full bg-red-500" />Rojo (abajo)
+                                                    </div>
+                                                    <div className="flex items-center gap-1.5">
+                                                        <div className="w-2 h-2 rounded-full bg-yellow-500" />Número de match
+                                                    </div>
                                                     {isOrganizer && <span className="text-gray-600">· Clic en atleta para marcar ganador</span>}
                                                     <span className="ml-auto text-gray-600">Resultados via WayChamp PSS</span>
                                                 </div>
@@ -854,7 +1133,9 @@ export default function BracketPage() {
                                         <div className="text-4xl mb-3">🥋</div>
                                         <p className="text-gray-500 text-sm mb-4">No hay pirámides creadas aún</p>
                                         {isOrganizer && (
-                                            <button onClick={() => { setView('new_pyramid'); setSelectedAthletes([]) }} className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-xl text-sm transition">
+                                            <button
+                                                onClick={() => { setView('new_pyramid'); setSelectedAthletes([]) }}
+                                                className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-xl text-sm transition">
                                                 Crear primera pirámide
                                             </button>
                                         )}
@@ -863,7 +1144,7 @@ export default function BracketPage() {
                             </>
                         )}
 
-                        {/* Vista nueva pirámide */}
+                        {/* New pyramid view */}
                         {view === 'new_pyramid' && (
                             <div className="space-y-4 max-w-3xl">
                                 <div className="flex items-center gap-3">
@@ -871,7 +1152,7 @@ export default function BracketPage() {
                                     <h2 className="text-lg font-semibold">Nueva pirámide — Fogueo {pyramidGroups.length + 1}</h2>
                                 </div>
 
-                                {/* Modo de sorteo */}
+                                {/* Sort mode */}
                                 <div className="bg-[#0d0d1a] border border-[#1e1e2e] rounded-2xl p-5">
                                     <h3 className="text-sm font-medium text-gray-400 mb-4">Modo de sorteo</h3>
                                     <div className="grid grid-cols-3 gap-3">
@@ -879,8 +1160,9 @@ export default function BracketPage() {
                                             <button
                                                 key={mode.id}
                                                 onClick={() => setSortMode(mode.id)}
-                                                className={`p-3 rounded-xl border text-left transition ${sortMode === mode.id ? 'border-blue-500 bg-blue-900/20' : 'border-[#1e1e2e] hover:border-gray-500'
-                                                    }`}
+                                                className={`p-3 rounded-xl border text-left transition ${sortMode === mode.id
+                                                    ? 'border-blue-500 bg-blue-900/20'
+                                                    : 'border-[#1e1e2e] hover:border-gray-500'}`}
                                             >
                                                 <div className="text-sm font-medium text-white mb-0.5">{mode.label}</div>
                                                 <div className="text-xs text-gray-500">{mode.desc}</div>
@@ -890,26 +1172,48 @@ export default function BracketPage() {
                                 </div>
 
                                 {/* Preview */}
-                                {selectedAthletes.length >= 2 && (
+                                {selectedAthletes.length >= 2 && previewConfig && (
                                     <div className="bg-[#0d1220] border border-blue-900/40 rounded-xl p-4">
                                         <div className="text-xs font-medium text-blue-400 mb-2">Vista previa del bracket</div>
                                         <div className="grid grid-cols-2 gap-3 text-xs">
-                                            <div><span className="text-gray-500">Atletas:</span> <span className="text-white font-medium">{selectedAthletes.length}</span></div>
+                                            <div>
+                                                <span className="text-gray-500">Atletas:</span>{' '}
+                                                <span className="text-white font-medium">{selectedAthletes.length}</span>
+                                            </div>
                                             <div>
                                                 <span className="text-gray-500">Bracket:</span>{' '}
                                                 <span className="text-white font-medium">
                                                     {sortMode === 'gender_only'
                                                         ? `${allAthletes.filter(a => selectedAthletes.includes(a.id) && a.gender === 'M').length}M + ${allAthletes.filter(a => selectedAthletes.includes(a.id) && a.gender === 'F').length}F`
-                                                        : `${previewSize} slots`}
+                                                        : `${previewConfig.bracketSize} slots`}
                                                 </span>
                                             </div>
-                                            <div><span className="text-gray-500">BYEs:</span> <span className="text-white font-medium">{sortMode === 'gender_only' ? 'Auto' : previewByes}</span></div>
-                                            <div><span className="text-gray-500">Matches:</span> <span className="text-white font-medium">Match 1–{previewMatches}</span></div>
+                                            <div>
+                                                {previewConfig.useOutbracket ? (
+                                                    <>
+                                                        <span className="text-gray-500">Outbracket:</span>{' '}
+                                                        <span className="font-medium" style={{ color: '#F59E0B' }}>
+                                                            {previewConfig.preMatchCount} pre-match{previewConfig.preMatchCount !== 1 ? 'es' : ''}
+                                                        </span>
+                                                    </>
+                                                ) : (
+                                                    <>
+                                                        <span className="text-gray-500">BYEs:</span>{' '}
+                                                        <span className="text-white font-medium">
+                                                            {sortMode === 'gender_only' ? 'Auto' : previewConfig.byeCount}
+                                                        </span>
+                                                    </>
+                                                )}
+                                            </div>
+                                            <div>
+                                                <span className="text-gray-500">Matches:</span>{' '}
+                                                <span className="text-white font-medium">Match 1–{previewMatches}</span>
+                                            </div>
                                         </div>
                                     </div>
                                 )}
 
-                                {/* Selección de atletas */}
+                                {/* Athlete selection */}
                                 <div className="bg-[#0d0d1a] border border-[#1e1e2e] rounded-2xl p-5">
                                     <div className="flex items-center justify-between mb-3">
                                         <h3 className="text-sm font-medium text-gray-400">
@@ -929,19 +1233,23 @@ export default function BracketPage() {
                                         onChange={e => setAthleteFilter(e.target.value)}
                                     />
 
-                                    {fogueo?.event_date <= today ? (
+                                    {fogueo?.event_date <= today || isOrganizer ? (
                                         <div className="space-y-1 max-h-72 overflow-y-auto">
                                             {filteredAthletes.map(a => {
                                                 const age = calculateAge(a.birth_date)
                                                 const level = (a.belt_levels as any)?.default_level ?? ''
-                                                const selected = selectedAthletes.includes(a.id)
+                                                const isSelected = selectedAthletes.includes(a.id)
                                                 return (
                                                     <div
                                                         key={a.id}
-                                                        onClick={() => setSelectedAthletes(prev => prev.includes(a.id) ? prev.filter(id => id !== a.id) : [...prev, a.id])}
-                                                        className={`flex items-center gap-3 p-2.5 rounded-xl cursor-pointer transition ${selected ? 'bg-blue-900/20 border border-blue-900/40' : 'hover:bg-[#13131f] border border-transparent'}`}
+                                                        onClick={() => setSelectedAthletes(prev =>
+                                                            prev.includes(a.id) ? prev.filter(id => id !== a.id) : [...prev, a.id]
+                                                        )}
+                                                        className={`flex items-center gap-3 p-2.5 rounded-xl cursor-pointer transition ${isSelected
+                                                            ? 'bg-blue-900/20 border border-blue-900/40'
+                                                            : 'hover:bg-[#13131f] border border-transparent'}`}
                                                     >
-                                                        <input type="checkbox" checked={selected} onChange={() => { }} className="w-4 h-4 flex-shrink-0" />
+                                                        <input type="checkbox" checked={isSelected} onChange={() => { }} className="w-4 h-4 flex-shrink-0" />
                                                         <div className="flex-1 min-w-0">
                                                             <div className="text-sm text-white">{a.first_name} {a.last_name}</div>
                                                             <div className="text-xs text-gray-500">
@@ -951,18 +1259,23 @@ export default function BracketPage() {
                                                     </div>
                                                 )
                                             })}
+                                            {filteredAthletes.length === 0 && (
+                                                <p className="text-gray-500 text-sm text-center py-4">Sin atletas que coincidan</p>
+                                            )}
                                         </div>
                                     ) : (
                                         <div className="bg-yellow-900/20 border border-yellow-900/40 rounded-xl p-4 text-center">
                                             <p className="text-yellow-400 text-sm">El listado completo estará disponible el día del evento</p>
                                             <p className="text-gray-500 text-xs mt-1">
-                                                {new Date(fogueo?.event_date + 'T00:00:00').toLocaleDateString('es-CO', { day: 'numeric', month: 'long', year: 'numeric' })}
+                                                {fogueo?.event_date
+                                                    ? new Date(fogueo.event_date + 'T00:00:00').toLocaleDateString('es-CO', { day: 'numeric', month: 'long', year: 'numeric' })
+                                                    : ''}
                                             </p>
                                         </div>
                                     )}
                                 </div>
 
-                                {/* Invitar clubes */}
+                                {/* Invite clubs */}
                                 {isOrganizer && filteredClubs.length > 0 && (
                                     <div className="bg-[#0d0d1a] border border-[#1e1e2e] rounded-2xl p-5">
                                         <h3 className="text-sm font-medium text-gray-400 mb-3">Invitar clubes al evento</h3>
@@ -1001,14 +1314,15 @@ export default function BracketPage() {
                                 )}
 
                                 <div className="flex gap-3">
-                                    <button onClick={() => setView('bracket')} className="flex-1 bg-[#0d0d1a] border border-[#1e1e2e] text-white py-3 rounded-xl text-sm font-medium hover:bg-[#13131f] transition">
+                                    <button
+                                        onClick={() => setView('bracket')}
+                                        className="flex-1 bg-[#0d0d1a] border border-[#1e1e2e] text-white py-3 rounded-xl text-sm font-medium hover:bg-[#13131f] transition">
                                         Cancelar
                                     </button>
                                     <button
                                         onClick={generateBracket}
                                         disabled={generating || selectedAthletes.length < 2}
-                                        className="flex-1 bg-blue-600 hover:bg-blue-700 text-white py-3 rounded-xl text-sm font-medium transition disabled:opacity-40"
-                                    >
+                                        className="flex-1 bg-blue-600 hover:bg-blue-700 text-white py-3 rounded-xl text-sm font-medium transition disabled:opacity-40">
                                         {generating ? 'Generando...' : `Generar Fogueo ${pyramidGroups.length + 1} →`}
                                     </button>
                                 </div>
@@ -1022,4 +1336,3 @@ export default function BracketPage() {
         </>
     )
 }
-

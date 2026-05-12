@@ -1,8 +1,15 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { createClient } from '@/lib/supabase/server'
 import { resend, FROM_EMAIL } from '@/lib/email/resend'
 import { athleteApprovedEmail, athleteRejectedEmail, athleteRegisteredEmail, clubRemovedFromFogueoEmail, clubInvitedToFogueoEmail } from '@/lib/email/templates'
 
 export async function POST(request: NextRequest) {
+    const supabase = await createClient()
+    const { data: { user } } = await supabase.auth.getUser()
+    if (!user) {
+        return NextResponse.json({ error: 'No autorizado' }, { status: 401 })
+    }
+
     try {
         const { type, to, athleteName, clubName, coachName, ...body } = await request.json()
         if (!type || !to || !athleteName || !clubName) {
