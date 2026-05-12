@@ -46,6 +46,8 @@ interface Pyramid {
     parent_group_id: string | null
     has_pre_match: boolean
     pre_match_count: number
+    group_key: string | null
+    group_label: string | null
 }
 
 interface PyramidGroup {
@@ -96,6 +98,140 @@ function getWeightCategory(weight: number): string {
     if (weight <= 73) return '-73kg'
     if (weight <= 78) return '-78kg'
     return '+78kg'
+}
+
+function getAgeCategory(birthDate: string): string {
+    if (!birthDate) return 'Infantil'
+    const today = new Date()
+    const birth = new Date(birthDate)
+    let age = today.getFullYear() - birth.getFullYear()
+    const m = today.getMonth() - birth.getMonth()
+    if (m < 0 || (m === 0 && today.getDate() < birth.getDate())) age--
+    if (age >= 9 && age <= 11) return 'Pre-cadete'
+    if (age >= 12 && age <= 14) return 'Cadete'
+    if (age >= 15 && age <= 17) return 'Junior'
+    if (age >= 18) return 'Senior'
+    return 'Infantil'
+}
+
+interface AthleteGroup {
+    key: string
+    label: string
+    gender: 'M' | 'F' | 'mixed'
+    athletes: Athlete[]
+    bracketSize: number
+    preMatchCount: number
+    byeCount: number
+    useOutbracket: boolean
+    mergedFrom?: string[]
+}
+
+function groupAthletes(
+    athletes: Athlete[],
+    sortMode: string,
+    separateGender: boolean,
+): AthleteGroup[] {
+    type RawGroup = { key: string; label: string; gender: 'M' | 'F' | 'mixed'; athletes: Athlete[]; mergedFrom: string[] }
+
+    const rawMap = new Map<string, { label: string; athletes: Athlete[] }>()
+
+    for (const a of athletes) {
+        let key: string
+        let label: string
+        switch (sortMode) {
+            case 'age_only':
+            case 'category': {
+                const cat = getAgeCategory(a.birth_date)
+                key = cat.toLowerCase().replace(' ', '-')
+                label = cat
+                break
+            }
+            case 'level_gender': {
+                const lvl = a.belt_levels?.default_level ?? 'sin-nivel'
+                key = lvl
+                label = lvl.charAt(0).toUpperCase() + lvl.slice(1)
+                break
+            }
+            case 'level_gender_weight': {
+                const lvl = a.belt_levels?.default_level ?? 'sin-nivel'
+                const wcat = a.training_weight ? getWeightCategory(a.training_weight) : 'sin-peso'
+                key = `${lvl}--${wcat}`
+                label = `${lvl.charAt(0).toUpperCase() + lvl.slice(1)} · ${wcat}`
+                break
+            }
+            default:
+                key = 'grupo'
+                label = 'Grupo'
+        }
+        if (!rawMap.has(key)) rawMap.set(key, { label, athletes: [] })
+        rawMap.get(key)!.athletes.push(a)
+    }
+
+    // Split by gender if requested
+    const flat: RawGroup[] = []
+    for (const [key, { label, athletes: grpAthletes }] of rawMap) {
+        if (separateGender) {
+            const males = grpAthletes.filter(a => a.gender === 'M')
+            const females = grpAthletes.filter(a => a.gender === 'F')
+            if (males.length > 0) flat.push({ key: `${key}-M`, label: `${label} · Masculino`, gender: 'M', athletes: males, mergedFrom: [] })
+            if (females.length > 0) flat.push({ key: `${key}-F`, label: `${label} · Femenino`, gender: 'F', athletes: females, mergedFrom: [] })
+        } else {
+            flat.push({ key, label, gender: 'mixed', athletes: grpAthletes, mergedFrom: [] })
+        }
+    }
+
+    // Merge groups with < 2 athletes into nearest same-gender group
+    let changed = true
+    while (changed) {
+        changed = false
+        const smallIdx = flat.findIndex(g => g.athletes.length < 2)
+        if (smallIdx === -1) break
+
+        const small = flat[smallIdx]
+        let bestIdx = -1
+        let bestDist = Infinity
+
+        for (let i = 0; i < flat.length; i++) {
+            if (i === smallIdx) continue
+            const sameGender = !separateGender || flat[i].gender === small.gender
+            if (!sameGender) continue
+            const dist = Math.abs(i - smallIdx)
+            if (dist < bestDist) { bestDist = dist; bestIdx = i }
+        }
+
+        // If no same-gender group found, fall back to any nearest group
+        if (bestIdx === -1) {
+            for (let i = 0; i < flat.length; i++) {
+                if (i === smallIdx) continue
+                const dist = Math.abs(i - smallIdx)
+                if (dist < bestDist) { bestDist = dist; bestIdx = i }
+            }
+        }
+
+        if (bestIdx !== -1) {
+            flat[bestIdx].athletes = [...flat[bestIdx].athletes, ...small.athletes]
+            flat[bestIdx].mergedFrom = [...flat[bestIdx].mergedFrom, small.label]
+            flat.splice(smallIdx, 1)
+        } else {
+            flat.splice(smallIdx, 1)
+        }
+        changed = true
+    }
+
+    return flat.map(g => {
+        const cfg = getBracketConfig(g.athletes.length)
+        return {
+            key: g.key,
+            label: g.label,
+            gender: g.gender,
+            athletes: g.athletes,
+            bracketSize: cfg.bracketSize,
+            preMatchCount: cfg.preMatchCount,
+            byeCount: cfg.byeCount,
+            useOutbracket: cfg.useOutbracket,
+            ...(g.mergedFrom.length > 0 ? { mergedFrom: g.mergedFrom } : {}),
+        }
+    })
 }
 
 // Largest power of 2 that is <= n
@@ -241,6 +377,16 @@ export default function BracketPage() {
     const [joinedClubs, setJoinedClubs] = useState<any[]>([])
     const today = new Date().toISOString().split('T')[0]
 
+    // ── Step 3 — preview interactivo de grupos ───────────────────────────────
+    const [step, setStep] = useState<1 | 2 | 3>(1)
+    const [separateGender, setSeparateGender] = useState(true)
+    const [groups, setGroups] = useState<AthleteGroup[]>([])
+    const [dragAthleteId, setDragAthleteId] = useState<string | null>(null)
+    const [dragFromKey, setDragFromKey] = useState<string | null>(null)
+    const [moveModal, setMoveModal] = useState<{ athleteId: string; fromKey: string } | null>(null)
+    const [dragOverKey, setDragOverKey] = useState<string | null>(null)
+    const [moveTargetKey, setMoveTargetKey] = useState<string>('')
+
     // ── Load ────────────────────────────────────────────────────────────────
 
     useEffect(() => {
@@ -325,7 +471,7 @@ export default function BracketPage() {
                 processed.add(p.id)
                 groups.push({
                     groupId: p.id,
-                    label: `Fogueo ${groups.length + 1} · ${SORT_MODE_LABELS[p.sort_mode]}`,
+                    label: p.group_label ?? `Fogueo ${groups.length + 1} · ${SORT_MODE_LABELS[p.sort_mode]}`,
                     sortMode: p.sort_mode,
                     pyramids: [p],
                 })
@@ -434,6 +580,8 @@ export default function BracketPage() {
         pyramidName: string,
         genderGroup: string | null,
         parentGroupId: string | null,
+        groupKey?: string,
+        groupLabel?: string,
     ): Promise<Pyramid | null> => {
         const config = getBracketConfig(athletes.length)
         const { bracketSize, preMatchCount, useOutbracket } = config
@@ -456,6 +604,8 @@ export default function BracketPage() {
                 parent_group_id: parentGroupId,
                 has_pre_match: preMatchCount > 0,
                 pre_match_count: preMatchCount,
+                group_key: groupKey ?? null,
+                group_label: groupLabel ?? null,
             }).select().single()
 
         if (error || !pyramid) return null
@@ -704,6 +854,59 @@ export default function BracketPage() {
         }
     }, [selectedAthletes, sortMode, allAthletes, pyramidGroups])
 
+    // ── Generate all groups ───────────────────────────────────────────────────
+
+    const handleGenerateAll = useCallback(async () => {
+        if (groups.length === 0) return
+        setGenerating(true)
+        try {
+            const newPyramids: Pyramid[] = []
+            let skipped = 0
+
+            for (const group of groups) {
+                if (group.athletes.length < 2) {
+                    toast.warning(`${group.label}: necesita al menos 2 atletas (omitido)`)
+                    skipped++
+                    continue
+                }
+                const sorted = sortAthletes(group.athletes, sortMode)
+                const p = await createSingleBracket(
+                    sorted,
+                    sortMode,
+                    group.label,
+                    group.gender === 'mixed' ? null : group.gender,
+                    null,
+                    group.key,
+                    group.label,
+                )
+                if (p) newPyramids.push(p)
+            }
+
+            if (newPyramids.length > 0) {
+                setPyramids(prev => {
+                    const updated = [...prev, ...newPyramids]
+                    const pGroups = buildPyramidGroups(updated)
+                    setPyramidGroups(pGroups)
+                    setActiveGroupId(newPyramids[0].id)
+                    return updated
+                })
+                for (const p of newPyramids) await loadMatchesForPyramid(p.id)
+                const total = newPyramids.length
+                toast.success(`${total} bracket${total !== 1 ? 's' : ''} generados${skipped > 0 ? ` · ${skipped} omitido${skipped !== 1 ? 's' : ''}` : ''}`)
+            }
+
+            setView('bracket')
+            setSelectedAthletes([])
+            setGroups([])
+            setStep(1)
+        } catch (e) {
+            console.error(e)
+            toast.error('Error al generar los brackets')
+        } finally {
+            setGenerating(false)
+        }
+    }, [groups, sortMode, pyramidGroups])
+
     // ── Mark winner ──────────────────────────────────────────────────────────
 
     const updateMatchWinner = async (
@@ -764,6 +967,31 @@ export default function BracketPage() {
         } else {
             toast.error('Error al unirse al fogueo')
         }
+    }
+
+    // ── Move athlete between groups ───────────────────────────────────────────
+
+    const moveAthleteToGroup = (athleteId: string, fromKey: string, toKey: string) => {
+        if (fromKey === toKey) return
+        setGroups(prev => {
+            const updated: AthleteGroup[] = prev.map(g => ({ ...g, athletes: [...g.athletes] }))
+            const fromGroup = updated.find(g => g.key === fromKey)
+            const toGroup = updated.find(g => g.key === toKey)
+            if (!fromGroup || !toGroup) return prev
+
+            const athlete = fromGroup.athletes.find(a => a.id === athleteId)
+            if (!athlete) return prev
+
+            fromGroup.athletes = fromGroup.athletes.filter(a => a.id !== athleteId)
+            toGroup.athletes = [...toGroup.athletes, athlete]
+
+            return updated
+                .filter(g => g.athletes.length > 0)
+                .map(g => {
+                    const cfg = getBracketConfig(g.athletes.length)
+                    return { ...g, bracketSize: cfg.bracketSize, preMatchCount: cfg.preMatchCount, byeCount: cfg.byeCount, useOutbracket: cfg.useOutbracket }
+                })
+        })
     }
 
     // ── Derived ──────────────────────────────────────────────────────────────
@@ -1054,7 +1282,7 @@ export default function BracketPage() {
                                 )}
                                 {isOrganizer && (
                                     <button
-                                        onClick={() => { setView('new_pyramid'); setSelectedAthletes([]) }}
+                                        onClick={() => { setView('new_pyramid'); setSelectedAthletes([]); setStep(1); setGroups([]) }}
                                         className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-xl text-sm font-medium transition">
                                         + Nueva pirámide
                                     </button>
@@ -1076,7 +1304,7 @@ export default function BracketPage() {
                                                         ? 'bg-blue-900/40 border-blue-500/50 text-blue-400'
                                                         : 'bg-[#0d0d1a] border-[#1e1e2e] text-gray-400 hover:border-gray-500'}`}
                                                 >
-                                                    <div className="text-xs font-medium">Fogueo {i + 1} · {SORT_MODE_LABELS[group.sortMode]}</div>
+                                                    <div className="text-xs font-medium">{group.label}</div>
                                                     <div className="text-xs text-gray-500 mt-0.5 max-w-48 truncate">
                                                         {group.pyramids[0]?.subtitle ?? ''}
                                                     </div>
@@ -1084,7 +1312,7 @@ export default function BracketPage() {
                                             ))}
                                             {isOrganizer && (
                                                 <button
-                                                    onClick={() => { setView('new_pyramid'); setSelectedAthletes([]) }}
+                                                    onClick={() => { setView('new_pyramid'); setSelectedAthletes([]); setStep(1); setGroups([]) }}
                                                     className="px-3 py-2 rounded-xl border border-dashed border-[#2e2e3e] text-gray-600 hover:border-blue-500/50 hover:text-blue-400 transition text-xs">
                                                     + Nueva
                                                 </button>
@@ -1134,7 +1362,7 @@ export default function BracketPage() {
                                         <p className="text-gray-500 text-sm mb-4">No hay pirámides creadas aún</p>
                                         {isOrganizer && (
                                             <button
-                                                onClick={() => { setView('new_pyramid'); setSelectedAthletes([]) }}
+                                                onClick={() => { setView('new_pyramid'); setSelectedAthletes([]); setStep(1); setGroups([]) }}
                                                 className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-xl text-sm transition">
                                                 Crear primera pirámide
                                             </button>
@@ -1146,187 +1374,401 @@ export default function BracketPage() {
 
                         {/* New pyramid view */}
                         {view === 'new_pyramid' && (
-                            <div className="space-y-4 max-w-3xl">
-                                <div className="flex items-center gap-3">
-                                    <button onClick={() => setView('bracket')} className="text-gray-500 hover:text-white transition text-sm">← Volver</button>
-                                    <h2 className="text-lg font-semibold">Nueva pirámide — Fogueo {pyramidGroups.length + 1}</h2>
-                                </div>
-
-                                {/* Sort mode */}
-                                <div className="bg-[#0d0d1a] border border-[#1e1e2e] rounded-2xl p-5">
-                                    <h3 className="text-sm font-medium text-gray-400 mb-4">Modo de sorteo</h3>
-                                    <div className="grid grid-cols-3 gap-3">
-                                        {SORT_MODES.map(mode => (
-                                            <button
-                                                key={mode.id}
-                                                onClick={() => setSortMode(mode.id)}
-                                                className={`p-3 rounded-xl border text-left transition ${sortMode === mode.id
-                                                    ? 'border-blue-500 bg-blue-900/20'
-                                                    : 'border-[#1e1e2e] hover:border-gray-500'}`}
-                                            >
-                                                <div className="text-sm font-medium text-white mb-0.5">{mode.label}</div>
-                                                <div className="text-xs text-gray-500">{mode.desc}</div>
-                                            </button>
-                                        ))}
-                                    </div>
-                                </div>
-
-                                {/* Preview */}
-                                {selectedAthletes.length >= 2 && previewConfig && (
-                                    <div className="bg-[#0d1220] border border-blue-900/40 rounded-xl p-4">
-                                        <div className="text-xs font-medium text-blue-400 mb-2">Vista previa del bracket</div>
-                                        <div className="grid grid-cols-2 gap-3 text-xs">
-                                            <div>
-                                                <span className="text-gray-500">Atletas:</span>{' '}
-                                                <span className="text-white font-medium">{selectedAthletes.length}</span>
-                                            </div>
-                                            <div>
-                                                <span className="text-gray-500">Bracket:</span>{' '}
-                                                <span className="text-white font-medium">
-                                                    {sortMode === 'gender_only'
-                                                        ? `${allAthletes.filter(a => selectedAthletes.includes(a.id) && a.gender === 'M').length}M + ${allAthletes.filter(a => selectedAthletes.includes(a.id) && a.gender === 'F').length}F`
-                                                        : `${previewConfig.bracketSize} slots`}
-                                                </span>
-                                            </div>
-                                            <div>
-                                                {previewConfig.useOutbracket ? (
-                                                    <>
-                                                        <span className="text-gray-500">Outbracket:</span>{' '}
-                                                        <span className="font-medium" style={{ color: '#F59E0B' }}>
-                                                            {previewConfig.preMatchCount} pre-match{previewConfig.preMatchCount !== 1 ? 'es' : ''}
-                                                        </span>
-                                                    </>
-                                                ) : (
-                                                    <>
-                                                        <span className="text-gray-500">BYEs:</span>{' '}
-                                                        <span className="text-white font-medium">
-                                                            {sortMode === 'gender_only' ? 'Auto' : previewConfig.byeCount}
-                                                        </span>
-                                                    </>
-                                                )}
-                                            </div>
-                                            <div>
-                                                <span className="text-gray-500">Matches:</span>{' '}
-                                                <span className="text-white font-medium">Match 1–{previewMatches}</span>
-                                            </div>
+                            <>
+                                {step < 2 ? (
+                                    /* ── Step 1: Sort mode + athlete selection + gender toggle ── */
+                                    <div className="space-y-4 max-w-3xl">
+                                        <div className="flex items-center gap-3">
+                                            <button onClick={() => { setView('bracket'); setStep(1); setGroups([]) }} className="text-gray-500 hover:text-white transition text-sm">← Volver</button>
+                                            <h2 className="text-lg font-semibold">Nueva pirámide — Fogueo {pyramidGroups.length + 1}</h2>
                                         </div>
-                                    </div>
-                                )}
 
-                                {/* Athlete selection */}
-                                <div className="bg-[#0d0d1a] border border-[#1e1e2e] rounded-2xl p-5">
-                                    <div className="flex items-center justify-between mb-3">
-                                        <h3 className="text-sm font-medium text-gray-400">
-                                            Atletas · {selectedAthletes.length} seleccionados de {allAthletes.length}
-                                        </h3>
-                                        <div className="flex gap-3">
-                                            <button onClick={() => setSelectedAthletes(allAthletes.map(a => a.id))} className="text-xs text-blue-400 hover:text-blue-300 transition">Todos</button>
-                                            <button onClick={() => setSelectedAthletes([])} className="text-xs text-gray-500 hover:text-white transition">Ninguno</button>
-                                        </div>
-                                    </div>
-
-                                    <input
-                                        type="text"
-                                        className="w-full bg-[#07070f] border border-[#1e1e2e] rounded-xl px-3 py-2 text-sm text-white focus:outline-none focus:border-blue-500 transition mb-3"
-                                        placeholder="Buscar atleta..."
-                                        value={athleteFilter}
-                                        onChange={e => setAthleteFilter(e.target.value)}
-                                    />
-
-                                    {fogueo?.event_date <= today || isOrganizer ? (
-                                        <div className="space-y-1 max-h-72 overflow-y-auto">
-                                            {filteredAthletes.map(a => {
-                                                const age = calculateAge(a.birth_date)
-                                                const level = (a.belt_levels as any)?.default_level ?? ''
-                                                const isSelected = selectedAthletes.includes(a.id)
-                                                return (
-                                                    <div
-                                                        key={a.id}
-                                                        onClick={() => setSelectedAthletes(prev =>
-                                                            prev.includes(a.id) ? prev.filter(id => id !== a.id) : [...prev, a.id]
-                                                        )}
-                                                        className={`flex items-center gap-3 p-2.5 rounded-xl cursor-pointer transition ${isSelected
-                                                            ? 'bg-blue-900/20 border border-blue-900/40'
-                                                            : 'hover:bg-[#13131f] border border-transparent'}`}
+                                        {/* Sort mode */}
+                                        <div className="bg-[#0d0d1a] border border-[#1e1e2e] rounded-2xl p-5">
+                                            <h3 className="text-sm font-medium text-gray-400 mb-4">Modo de sorteo</h3>
+                                            <div className="grid grid-cols-3 gap-3">
+                                                {SORT_MODES.map(mode => (
+                                                    <button
+                                                        key={mode.id}
+                                                        onClick={() => setSortMode(mode.id)}
+                                                        className={`p-3 rounded-xl border text-left transition ${sortMode === mode.id
+                                                            ? 'border-blue-500 bg-blue-900/20'
+                                                            : 'border-[#1e1e2e] hover:border-gray-500'}`}
                                                     >
-                                                        <input type="checkbox" checked={isSelected} onChange={() => { }} className="w-4 h-4 flex-shrink-0" />
-                                                        <div className="flex-1 min-w-0">
-                                                            <div className="text-sm text-white">{a.first_name} {a.last_name}</div>
-                                                            <div className="text-xs text-gray-500">
-                                                                {age}a · {a.training_weight ? `${a.training_weight}kg` : '—'} · {a.gender === 'M' ? 'M' : 'F'} · <span className="capitalize">{level}</span> · {a.club_name}
+                                                        <div className="text-sm font-medium text-white mb-0.5">{mode.label}</div>
+                                                        <div className="text-xs text-gray-500">{mode.desc}</div>
+                                                    </button>
+                                                ))}
+                                            </div>
+                                        </div>
+
+                                        {/* Preview */}
+                                        {selectedAthletes.length >= 2 && previewConfig && (
+                                            <div className="bg-[#0d1220] border border-blue-900/40 rounded-xl p-4">
+                                                <div className="text-xs font-medium text-blue-400 mb-2">Vista previa del bracket</div>
+                                                <div className="grid grid-cols-2 gap-3 text-xs">
+                                                    <div>
+                                                        <span className="text-gray-500">Atletas:</span>{' '}
+                                                        <span className="text-white font-medium">{selectedAthletes.length}</span>
+                                                    </div>
+                                                    <div>
+                                                        <span className="text-gray-500">Bracket:</span>{' '}
+                                                        <span className="text-white font-medium">
+                                                            {sortMode === 'gender_only'
+                                                                ? `${allAthletes.filter(a => selectedAthletes.includes(a.id) && a.gender === 'M').length}M + ${allAthletes.filter(a => selectedAthletes.includes(a.id) && a.gender === 'F').length}F`
+                                                                : `${previewConfig.bracketSize} slots`}
+                                                        </span>
+                                                    </div>
+                                                    <div>
+                                                        {previewConfig.useOutbracket ? (
+                                                            <>
+                                                                <span className="text-gray-500">Outbracket:</span>{' '}
+                                                                <span className="font-medium" style={{ color: '#F59E0B' }}>
+                                                                    {previewConfig.preMatchCount} pre-match{previewConfig.preMatchCount !== 1 ? 'es' : ''}
+                                                                </span>
+                                                            </>
+                                                        ) : (
+                                                            <>
+                                                                <span className="text-gray-500">BYEs:</span>{' '}
+                                                                <span className="text-white font-medium">
+                                                                    {sortMode === 'gender_only' ? 'Auto' : previewConfig.byeCount}
+                                                                </span>
+                                                            </>
+                                                        )}
+                                                    </div>
+                                                    <div>
+                                                        <span className="text-gray-500">Matches:</span>{' '}
+                                                        <span className="text-white font-medium">Match 1–{previewMatches}</span>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        )}
+
+                                        {/* Athlete selection */}
+                                        <div className="bg-[#0d0d1a] border border-[#1e1e2e] rounded-2xl p-5">
+                                            <div className="flex items-center justify-between mb-3">
+                                                <h3 className="text-sm font-medium text-gray-400">
+                                                    Atletas · {selectedAthletes.length} seleccionados de {allAthletes.length}
+                                                </h3>
+                                                <div className="flex gap-3">
+                                                    <button onClick={() => setSelectedAthletes(allAthletes.map(a => a.id))} className="text-xs text-blue-400 hover:text-blue-300 transition">Todos</button>
+                                                    <button onClick={() => setSelectedAthletes([])} className="text-xs text-gray-500 hover:text-white transition">Ninguno</button>
+                                                </div>
+                                            </div>
+                                            <input
+                                                type="text"
+                                                className="w-full bg-[#07070f] border border-[#1e1e2e] rounded-xl px-3 py-2 text-sm text-white focus:outline-none focus:border-blue-500 transition mb-3"
+                                                placeholder="Buscar atleta..."
+                                                value={athleteFilter}
+                                                onChange={e => setAthleteFilter(e.target.value)}
+                                            />
+                                            {fogueo?.event_date <= today || isOrganizer ? (
+                                                <div className="space-y-1 max-h-72 overflow-y-auto">
+                                                    {filteredAthletes.map(a => {
+                                                        const age = calculateAge(a.birth_date)
+                                                        const level = (a.belt_levels as any)?.default_level ?? ''
+                                                        const isSelected = selectedAthletes.includes(a.id)
+                                                        return (
+                                                            <div
+                                                                key={a.id}
+                                                                onClick={() => setSelectedAthletes(prev =>
+                                                                    prev.includes(a.id) ? prev.filter(id => id !== a.id) : [...prev, a.id]
+                                                                )}
+                                                                className={`flex items-center gap-3 p-2.5 rounded-xl cursor-pointer transition ${isSelected
+                                                                    ? 'bg-blue-900/20 border border-blue-900/40'
+                                                                    : 'hover:bg-[#13131f] border border-transparent'}`}
+                                                            >
+                                                                <input type="checkbox" checked={isSelected} onChange={() => { }} className="w-4 h-4 flex-shrink-0" />
+                                                                <div className="flex-1 min-w-0">
+                                                                    <div className="text-sm text-white">{a.first_name} {a.last_name}</div>
+                                                                    <div className="text-xs text-gray-500">
+                                                                        {age}a · {a.training_weight ? `${a.training_weight}kg` : '—'} · {a.gender === 'M' ? 'M' : 'F'} · <span className="capitalize">{level}</span> · {a.club_name}
+                                                                    </div>
+                                                                </div>
                                                             </div>
+                                                        )
+                                                    })}
+                                                    {filteredAthletes.length === 0 && (
+                                                        <p className="text-gray-500 text-sm text-center py-4">Sin atletas que coincidan</p>
+                                                    )}
+                                                </div>
+                                            ) : (
+                                                <div className="bg-yellow-900/20 border border-yellow-900/40 rounded-xl p-4 text-center">
+                                                    <p className="text-yellow-400 text-sm">El listado completo estará disponible el día del evento</p>
+                                                    <p className="text-gray-500 text-xs mt-1">
+                                                        {fogueo?.event_date
+                                                            ? new Date(fogueo.event_date + 'T00:00:00').toLocaleDateString('es-CO', { day: 'numeric', month: 'long', year: 'numeric' })
+                                                            : ''}
+                                                    </p>
+                                                </div>
+                                            )}
+                                        </div>
+
+                                        {/* Invite clubs */}
+                                        {isOrganizer && filteredClubs.length > 0 && (
+                                            <div className="bg-[#0d0d1a] border border-[#1e1e2e] rounded-2xl p-5">
+                                                <h3 className="text-sm font-medium text-gray-400 mb-3">Invitar clubes al evento</h3>
+                                                <input
+                                                    type="text"
+                                                    className="w-full bg-[#07070f] border border-[#1e1e2e] rounded-xl px-3 py-2 text-sm text-white focus:outline-none focus:border-blue-500 transition mb-3"
+                                                    placeholder="Buscar club por nombre o ciudad..."
+                                                    value={clubFilter}
+                                                    onChange={e => setClubFilter(e.target.value)}
+                                                />
+                                                <div className="space-y-2 max-h-48 overflow-y-auto">
+                                                    {filteredClubs.map(c => (
+                                                        <div key={c.id} className="flex items-center gap-3 py-2 border-b border-[#13131f] last:border-0">
+                                                            <div className="w-8 h-8 rounded-lg bg-[#13132a] flex items-center justify-center text-xs font-bold text-blue-400 flex-shrink-0">
+                                                                {c.name[0]}{c.name.split(' ')[1]?.[0] ?? ''}
+                                                            </div>
+                                                            <div className="flex-1 min-w-0">
+                                                                <div className="text-sm text-white truncate">{c.name}</div>
+                                                                <div className="text-xs text-gray-500">{c.city}</div>
+                                                            </div>
+                                                            <button
+                                                                onClick={async () => {
+                                                                    await supabase.from('fogueo_clubs').insert({ fogueo_id: fogueoId, club_id: c.id, status: 'pending' })
+                                                                    toast.success(`Invitación enviada a ${c.name}`)
+                                                                    const { data: fc } = await supabase.from('fogueo_clubs').select('*, clubs(id, name, city, logo_url)').eq('fogueo_id', fogueoId)
+                                                                    if (fc) setJoinedClubs(fc)
+                                                                }}
+                                                                className="text-xs text-blue-400 hover:text-blue-300 transition px-2 py-1 rounded-lg hover:bg-blue-900/20 flex-shrink-0"
+                                                            >
+                                                                Invitar
+                                                            </button>
+                                                        </div>
+                                                    ))}
+                                                </div>
+                                            </div>
+                                        )}
+
+                                        {/* Step 1 — Gender toggle for grouped modes */}
+                                        {!['gender_only', 'manual'].includes(sortMode) && selectedAthletes.length >= 2 && (
+                                            <div className="bg-[#0d0d1a] border border-[#1e1e2e] rounded-2xl p-5">
+                                                <h3 className="text-sm font-medium text-white mb-1">¿Separar masculino y femenino en brackets separados?</h3>
+                                                <p className="text-xs text-gray-500 mb-4">Cada categoría se dividirá en dos brackets según el género</p>
+                                                <div className="flex gap-3">
+                                                    <button
+                                                        onClick={() => {
+                                                            const sel = allAthletes.filter(a => selectedAthletes.includes(a.id))
+                                                            setSeparateGender(true)
+                                                            setGroups(groupAthletes(sel, sortMode, true))
+                                                            setStep(2)
+                                                        }}
+                                                        className="flex-1 py-3 rounded-xl text-sm font-medium border border-blue-500 bg-blue-900/20 text-blue-400 hover:bg-blue-900/40 transition"
+                                                    >
+                                                        Sí, separar
+                                                    </button>
+                                                    <button
+                                                        onClick={() => {
+                                                            const sel = allAthletes.filter(a => selectedAthletes.includes(a.id))
+                                                            setSeparateGender(false)
+                                                            setGroups(groupAthletes(sel, sortMode, false))
+                                                            setStep(2)
+                                                        }}
+                                                        className="flex-1 py-3 rounded-xl text-sm font-medium border border-[#1e1e2e] text-gray-400 hover:border-gray-500 hover:text-white transition"
+                                                    >
+                                                        No, mezclar
+                                                    </button>
+                                                </div>
+                                            </div>
+                                        )}
+
+                                        {/* Bottom buttons */}
+                                        <div className="flex gap-3">
+                                            <button
+                                                onClick={() => { setView('bracket'); setStep(1); setGroups([]) }}
+                                                className="flex-1 bg-[#0d0d1a] border border-[#1e1e2e] text-white py-3 rounded-xl text-sm font-medium hover:bg-[#13131f] transition">
+                                                Cancelar
+                                            </button>
+                                            {['gender_only', 'manual'].includes(sortMode) && (
+                                                <button
+                                                    onClick={generateBracket}
+                                                    disabled={generating || selectedAthletes.length < 2}
+                                                    className="flex-1 bg-blue-600 hover:bg-blue-700 text-white py-3 rounded-xl text-sm font-medium transition disabled:opacity-40">
+                                                    {generating ? 'Generando...' : `Generar Fogueo ${pyramidGroups.length + 1} →`}
+                                                </button>
+                                            )}
+                                        </div>
+                                    </div>
+                                ) : (
+                                    /* ── Step 2: Group preview ── */
+                                    <div className="space-y-4">
+                                        <div className="flex items-center gap-3">
+                                            <button onClick={() => setStep(1)} className="text-gray-500 hover:text-white transition text-sm">← Atrás</button>
+                                            <h2 className="text-lg font-semibold">Preview de grupos · Fogueo {pyramidGroups.length + 1}</h2>
+                                            <span className="text-xs text-gray-500">{groups.length} grupo{groups.length !== 1 ? 's' : ''} · {selectedAthletes.length} atletas</span>
+                                        </div>
+
+                                        {/* Group cards */}
+                                        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+                                            {groups.map(group => {
+                                                const isDragOver = dragOverKey === group.key
+                                                const headerBg = group.gender === 'M' ? '#0c1f3f' : group.gender === 'F' ? '#2d0f1c' : '#13131f'
+                                                const headerBorder = group.gender === 'M' ? '#1e3a5f' : group.gender === 'F' ? '#5f1e30' : '#1e1e2e'
+                                                const headerColor = group.gender === 'M' ? '#93c5fd' : group.gender === 'F' ? '#f9a8d4' : '#d1d5db'
+                                                return (
+                                                    <div key={group.key}
+                                                        className="rounded-2xl border overflow-hidden transition-colors"
+                                                        style={{
+                                                            background: isDragOver ? (group.gender === 'M' ? '#0c2448' : group.gender === 'F' ? '#3a1224' : '#1a1a2e') : '#0d0d1a',
+                                                            borderColor: isDragOver ? headerBorder : '#1e1e2e',
+                                                        }}
+                                                        onDragOver={e => { e.preventDefault(); setDragOverKey(group.key) }}
+                                                        onDragLeave={e => { if (!e.currentTarget.contains(e.relatedTarget as Node)) setDragOverKey(null) }}
+                                                        onDrop={() => {
+                                                            if (dragAthleteId && dragFromKey && dragFromKey !== group.key) {
+                                                                moveAthleteToGroup(dragAthleteId, dragFromKey, group.key)
+                                                            }
+                                                            setDragAthleteId(null); setDragFromKey(null); setDragOverKey(null)
+                                                        }}
+                                                    >
+                                                        {/* Card header */}
+                                                        <div className="px-4 py-3 border-b" style={{ background: headerBg, borderColor: headerBorder }}>
+                                                            <div className="flex items-center justify-between">
+                                                                <span className="text-sm font-semibold" style={{ color: headerColor }}>{group.label}</span>
+                                                                <span className="text-xs px-2 py-0.5 rounded-full font-medium" style={{ background: headerBorder, color: headerColor }}>
+                                                                    {group.athletes.length}
+                                                                </span>
+                                                            </div>
+                                                            <div className="text-xs mt-1" style={{ color: '#6b7280' }}>
+                                                                {group.athletes.length >= 2
+                                                                    ? group.useOutbracket
+                                                                        ? `bracket de ${group.bracketSize} + ${group.preMatchCount} pre-match${group.preMatchCount !== 1 ? 'es' : ''}`
+                                                                        : group.byeCount > 0
+                                                                            ? `bracket de ${group.bracketSize} · ${group.byeCount} BYE${group.byeCount !== 1 ? 's' : ''}`
+                                                                            : `bracket de ${group.bracketSize} · perfecto`
+                                                                    : <span style={{ color: '#ef4444' }}>Mínimo 2 atletas</span>
+                                                                }
+                                                            </div>
+                                                            {(group.mergedFrom?.length ?? 0) > 0 && (
+                                                                <div className="text-xs mt-1" style={{ color: '#F59E0B' }}>
+                                                                    Incluye: {group.mergedFrom!.join(', ')}
+                                                                </div>
+                                                            )}
+                                                        </div>
+
+                                                        {/* Athlete chips */}
+                                                        <div className="p-3 flex flex-wrap gap-1.5 min-h-[56px]">
+                                                            {group.athletes.map(a => (
+                                                                <div
+                                                                    key={a.id}
+                                                                    draggable
+                                                                    onDragStart={() => { setDragAthleteId(a.id); setDragFromKey(group.key) }}
+                                                                    className="flex items-center gap-1 px-2 py-1 rounded-lg text-xs cursor-grab select-none border border-[#1e1e2e]"
+                                                                    style={{ background: '#13131f' }}
+                                                                >
+                                                                    <div className="w-1.5 h-1.5 rounded-full flex-shrink-0"
+                                                                        style={{ background: a.gender === 'M' ? '#3b82f6' : '#ec4899' }} />
+                                                                    <span className="text-gray-200">{a.first_name} {a.last_name[0]}.</span>
+                                                                    <span className="text-gray-500">{calculateAge(a.birth_date)}a</span>
+                                                                    {a.training_weight && <span className="text-gray-500">{a.training_weight}kg</span>}
+                                                                    <button
+                                                                        onClick={e => { e.stopPropagation(); setMoveModal({ athleteId: a.id, fromKey: group.key }); setMoveTargetKey('') }}
+                                                                        className="text-gray-600 hover:text-blue-400 transition ml-0.5 flex-shrink-0"
+                                                                        title="Mover a otro grupo"
+                                                                    >⇄</button>
+                                                                </div>
+                                                            ))}
+                                                            {group.athletes.length === 0 && (
+                                                                <p className="text-gray-600 text-xs py-2 w-full text-center">Sin atletas — arrastra aquí</p>
+                                                            )}
                                                         </div>
                                                     </div>
                                                 )
                                             })}
-                                            {filteredAthletes.length === 0 && (
-                                                <p className="text-gray-500 text-sm text-center py-4">Sin atletas que coincidan</p>
-                                            )}
                                         </div>
-                                    ) : (
-                                        <div className="bg-yellow-900/20 border border-yellow-900/40 rounded-xl p-4 text-center">
-                                            <p className="text-yellow-400 text-sm">El listado completo estará disponible el día del evento</p>
-                                            <p className="text-gray-500 text-xs mt-1">
-                                                {fogueo?.event_date
-                                                    ? new Date(fogueo.event_date + 'T00:00:00').toLocaleDateString('es-CO', { day: 'numeric', month: 'long', year: 'numeric' })
-                                                    : ''}
-                                            </p>
-                                        </div>
-                                    )}
-                                </div>
 
-                                {/* Invite clubs */}
-                                {isOrganizer && filteredClubs.length > 0 && (
-                                    <div className="bg-[#0d0d1a] border border-[#1e1e2e] rounded-2xl p-5">
-                                        <h3 className="text-sm font-medium text-gray-400 mb-3">Invitar clubes al evento</h3>
-                                        <input
-                                            type="text"
-                                            className="w-full bg-[#07070f] border border-[#1e1e2e] rounded-xl px-3 py-2 text-sm text-white focus:outline-none focus:border-blue-500 transition mb-3"
-                                            placeholder="Buscar club por nombre o ciudad..."
-                                            value={clubFilter}
-                                            onChange={e => setClubFilter(e.target.value)}
-                                        />
-                                        <div className="space-y-2 max-h-48 overflow-y-auto">
-                                            {filteredClubs.map(c => (
-                                                <div key={c.id} className="flex items-center gap-3 py-2 border-b border-[#13131f] last:border-0">
-                                                    <div className="w-8 h-8 rounded-lg bg-[#13132a] flex items-center justify-center text-xs font-bold text-blue-400 flex-shrink-0">
-                                                        {c.name[0]}{c.name.split(' ')[1]?.[0] ?? ''}
+                                        {/* Summary + generate */}
+                                        <div className="bg-[#0d0d1a] border border-[#1e1e2e] rounded-2xl p-5">
+                                            <h3 className="text-xs text-gray-500 uppercase tracking-wider mb-3">Resumen</h3>
+                                            <div className="space-y-2 mb-4">
+                                                {groups.map(g => (
+                                                    <div key={g.key} className="flex items-center justify-between text-xs py-1 border-b border-[#13131f] last:border-0">
+                                                        <span className="text-gray-300">{g.label}</span>
+                                                        <div className="flex items-center gap-3">
+                                                            <span className="text-gray-500">{g.athletes.length} atletas</span>
+                                                            <span style={{ color: g.athletes.length < 2 ? '#ef4444' : g.useOutbracket ? '#F59E0B' : '#6b7280' }}>
+                                                                {g.athletes.length < 2 ? 'insuficiente' : g.useOutbracket ? `outbracket ${g.bracketSize}` : `bracket ${g.bracketSize}`}
+                                                            </span>
+                                                        </div>
                                                     </div>
-                                                    <div className="flex-1 min-w-0">
-                                                        <div className="text-sm text-white truncate">{c.name}</div>
-                                                        <div className="text-xs text-gray-500">{c.city}</div>
-                                                    </div>
-                                                    <button
-                                                        onClick={async () => {
-                                                            await supabase.from('fogueo_clubs').insert({ fogueo_id: fogueoId, club_id: c.id, status: 'pending' })
-                                                            toast.success(`Invitación enviada a ${c.name}`)
-                                                            const { data: fc } = await supabase.from('fogueo_clubs').select('*, clubs(id, name, city, logo_url)').eq('fogueo_id', fogueoId)
-                                                            if (fc) setJoinedClubs(fc)
-                                                        }}
-                                                        className="text-xs text-blue-400 hover:text-blue-300 transition px-2 py-1 rounded-lg hover:bg-blue-900/20 flex-shrink-0"
-                                                    >
-                                                        Invitar
-                                                    </button>
+                                                ))}
+                                            </div>
+                                            {groups.some(g => (g.mergedFrom?.length ?? 0) > 0) && (
+                                                <div className="text-xs text-yellow-400 bg-yellow-900/20 border border-yellow-900/40 rounded-xl p-3 mb-4">
+                                                    Algunos grupos fueron fusionados automáticamente por tener menos de 2 atletas.
                                                 </div>
-                                            ))}
+                                            )}
+                                            <div className="flex gap-3">
+                                                <button
+                                                    onClick={() => setStep(1)}
+                                                    className="flex-1 bg-[#0d0d1a] border border-[#1e1e2e] text-white py-3 rounded-xl text-sm font-medium hover:bg-[#13131f] transition">
+                                                    ← Atrás
+                                                </button>
+                                                <button
+                                                    onClick={handleGenerateAll}
+                                                    disabled={generating || groups.filter(g => g.athletes.length >= 2).length === 0}
+                                                    className="flex-1 bg-blue-600 hover:bg-blue-700 text-white py-3 rounded-xl text-sm font-medium transition disabled:opacity-40">
+                                                    {generating
+                                                        ? 'Generando...'
+                                                        : (() => {
+                                                            const n = groups.filter(g => g.athletes.length >= 2).length
+                                                            return `Generar ${n} bracket${n !== 1 ? 's' : ''} →`
+                                                        })()
+                                                    }
+                                                </button>
+                                            </div>
                                         </div>
                                     </div>
                                 )}
 
-                                <div className="flex gap-3">
-                                    <button
-                                        onClick={() => setView('bracket')}
-                                        className="flex-1 bg-[#0d0d1a] border border-[#1e1e2e] text-white py-3 rounded-xl text-sm font-medium hover:bg-[#13131f] transition">
-                                        Cancelar
-                                    </button>
-                                    <button
-                                        onClick={generateBracket}
-                                        disabled={generating || selectedAthletes.length < 2}
-                                        className="flex-1 bg-blue-600 hover:bg-blue-700 text-white py-3 rounded-xl text-sm font-medium transition disabled:opacity-40">
-                                        {generating ? 'Generando...' : `Generar Fogueo ${pyramidGroups.length + 1} →`}
-                                    </button>
-                                </div>
-                            </div>
+                                {/* Move modal */}
+                                {moveModal && (() => {
+                                    const athlete = allAthletes.find(a => a.id === moveModal.athleteId)
+                                    return (
+                                        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70"
+                                            onClick={() => setMoveModal(null)}>
+                                            <div className="bg-[#0d0d1a] border border-[#1e1e2e] rounded-2xl p-6 w-80 mx-4"
+                                                onClick={e => e.stopPropagation()}>
+                                                <h3 className="text-sm font-medium text-white mb-1">Mover atleta</h3>
+                                                <p className="text-xs text-gray-400 mb-4">
+                                                    {athlete ? `${athlete.first_name} ${athlete.last_name}` : ''}
+                                                </p>
+                                                <select
+                                                    className="w-full bg-[#07070f] border border-[#1e1e2e] rounded-xl px-3 py-2 text-sm text-white mb-4 focus:outline-none focus:border-blue-500"
+                                                    value={moveTargetKey}
+                                                    onChange={e => setMoveTargetKey(e.target.value)}
+                                                >
+                                                    <option value="" disabled>Seleccionar grupo destino</option>
+                                                    {groups.filter(g => g.key !== moveModal.fromKey).map(g => (
+                                                        <option key={g.key} value={g.key}>{g.label} ({g.athletes.length})</option>
+                                                    ))}
+                                                </select>
+                                                <div className="flex gap-3">
+                                                    <button
+                                                        onClick={() => setMoveModal(null)}
+                                                        className="flex-1 py-2 rounded-xl text-sm border border-[#1e1e2e] text-gray-400 hover:text-white transition">
+                                                        Cancelar
+                                                    </button>
+                                                    <button
+                                                        onClick={() => {
+                                                            if (moveTargetKey) {
+                                                                moveAthleteToGroup(moveModal.athleteId, moveModal.fromKey, moveTargetKey)
+                                                                setMoveModal(null)
+                                                                setMoveTargetKey('')
+                                                            }
+                                                        }}
+                                                        disabled={!moveTargetKey}
+                                                        className="flex-1 py-2 rounded-xl text-sm bg-blue-600 hover:bg-blue-700 text-white transition disabled:opacity-40">
+                                                        Confirmar
+                                                    </button>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    )
+                                })()}
+                            </>
                         )}
 
                     </div>
