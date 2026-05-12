@@ -124,6 +124,7 @@ interface AthleteGroup {
     byeCount: number
     useOutbracket: boolean
     mergedFrom?: string[]
+    mergedMessage?: string
 }
 
 function groupAthletes(
@@ -229,7 +230,10 @@ function groupAthletes(
             preMatchCount: cfg.preMatchCount,
             byeCount: cfg.byeCount,
             useOutbracket: cfg.useOutbracket,
-            ...(g.mergedFrom.length > 0 ? { mergedFrom: g.mergedFrom } : {}),
+            ...(g.mergedFrom.length > 0 ? {
+                mergedFrom: g.mergedFrom,
+                mergedMessage: `Se unieron aquí: ${g.mergedFrom.join(', ')} (tenían menos de 2 atletas)`,
+            } : {}),
         }
     })
 }
@@ -712,14 +716,27 @@ export default function BracketPage() {
 
         } else {
             // ── Standard BYE path ────────────────────────────────────────────
+            // BYEs always go at the END of R1 slots (official TKD rule).
+            // Each BYE slot = one real athlete + one null partner → winner is the athlete.
+            const { byeCount } = config
             const rounds = Math.log2(bracketSize)
-            const slots: (Athlete | null)[] = new Array(bracketSize).fill(null)
-            for (let i = 0; i < athletes.length; i++) slots[i] = athletes[i]
+            const r1MatchCount = bracketSize / 2
+            const realMatchCount = r1MatchCount - byeCount
+
+            // Real pairs at the front, [athlete, null] BYE pairs at the back
+            const finalSlots: (Athlete | null)[] = []
+            for (let i = 0; i < realMatchCount * 2; i++) {
+                finalSlots.push(athletes[i] ?? null)
+            }
+            for (let i = 0; i < byeCount; i++) {
+                finalSlots.push(athletes[realMatchCount * 2 + i] ?? null)
+                finalSlots.push(null)
+            }
 
             const round1: any[] = []
             for (let i = 0; i < bracketSize; i += 2) {
-                const blue = slots[i] ?? null
-                const red = slots[i + 1] ?? null
+                const blue = finalSlots[i] ?? null
+                const red = finalSlots[i + 1] ?? null
                 const isBye = !blue || !red
                 round1.push({
                     pyramid_id: pyramid.id,
@@ -1177,17 +1194,45 @@ export default function BracketPage() {
                         {/* Main bracket — progressive disclosure */}
                         <div className="flex gap-3 overflow-x-auto pb-4">
                             {visibleRounds.map(round => {
-                                const visibleMatches = mainMatches.filter(m => m.round_number === round && !m.is_bye)
+                                const realMatches = mainMatches.filter(m => m.round_number === round && !m.is_bye)
+                                // BYE cards shown only in R1
+                                const byeMatches = round === 1
+                                    ? mainMatches.filter(m => m.round_number === 1 && m.is_bye)
+                                    : []
                                 return (
                                     <div key={round} className="flex-shrink-0" style={{ minWidth: '185px' }}>
                                         <div className="flex items-center justify-between text-xs text-gray-500 uppercase tracking-wider mb-3 px-1">
                                             <span>{getRoundName(round, totalRounds)}</span>
-                                            <span className="text-gray-600">{visibleMatches.length}c</span>
+                                            <span className="text-gray-600">{realMatches.length}c</span>
                                         </div>
                                         <div className="space-y-2">
-                                            {visibleMatches.map(match => (
+                                            {realMatches.map(match => (
                                                 <MatchCard key={match.id} match={match} pyramidId={pyramid.id} />
                                             ))}
+                                            {byeMatches.map(match => {
+                                                const byeAthlete = getAthleteById(match.winner_id)
+                                                return (
+                                                    <div key={match.id} className="rounded-xl overflow-hidden"
+                                                        style={{ minWidth: '185px', background: '#1a1200', border: '1px dashed #7a5c00' }}>
+                                                        <div className="flex items-center justify-between px-2.5 py-1.5 border-b"
+                                                            style={{ borderColor: '#7a5c00', background: '#221600' }}>
+                                                            <span className="text-xs font-bold" style={{ color: '#F59E0B' }}>BYE</span>
+                                                            <span className="text-xs" style={{ color: '#7a5c00' }}>auto ✓</span>
+                                                        </div>
+                                                        <div className="px-3 py-2.5">
+                                                            <div className="text-xs font-medium text-gray-300 truncate">
+                                                                {byeAthlete ? `${byeAthlete.first_name} ${byeAthlete.last_name}` : '—'}
+                                                            </div>
+                                                            {byeAthlete && (
+                                                                <div className="text-xs text-gray-600 truncate mt-0.5">{byeAthlete.club_name}</div>
+                                                            )}
+                                                            <div className="text-xs mt-1.5" style={{ color: '#92400e' }}>
+                                                                Avanza a ronda 2 →
+                                                            </div>
+                                                        </div>
+                                                    </div>
+                                                )
+                                            })}
                                         </div>
                                     </div>
                                 )
@@ -1641,12 +1686,15 @@ export default function BracketPage() {
                                                                     : <span style={{ color: '#ef4444' }}>Mínimo 2 atletas</span>
                                                                 }
                                                             </div>
-                                                            {(group.mergedFrom?.length ?? 0) > 0 && (
-                                                                <div className="text-xs mt-1" style={{ color: '#F59E0B' }}>
-                                                                    Incluye: {group.mergedFrom!.join(', ')}
-                                                                </div>
-                                                            )}
                                                         </div>
+
+                                                        {/* Merge warning — amber block below header */}
+                                                        {group.mergedMessage && (
+                                                            <div className="px-3 py-2 border-b text-xs"
+                                                                style={{ background: '#1a1000', borderColor: '#7a5c00', color: '#F59E0B' }}>
+                                                                {group.mergedMessage}
+                                                            </div>
+                                                        )}
 
                                                         {/* Athlete chips */}
                                                         <div className="p-3 flex flex-wrap gap-1.5 min-h-[56px]">
