@@ -1,12 +1,13 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useMemo } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import Sidebar from '@/components/Sidebar'
 import { useToast } from '@/hooks/useToast'
 import { ToastContainer } from '@/components/Toast'
+import { calculateAge } from '@/lib/utils/age'
 
 interface Athlete {
     id: string
@@ -28,18 +29,10 @@ interface Club {
     coach_email: string
 }
 
-function calculateAge(birthDate: string): number {
-    const today = new Date()
-    const birth = new Date(birthDate)
-    let age = today.getFullYear() - birth.getFullYear()
-    const m = today.getMonth() - birth.getMonth()
-    if (m < 0 || (m === 0 && today.getDate() < birth.getDate())) age--
-    return age
-}
 
 export default function NewFogueoPage() {
     const router = useRouter()
-    const supabase = createClient()
+    const supabase = useMemo(() => createClient(), [])
     const { toasts, removeToast, toast } = useToast()
     const [loading, setLoading] = useState(false)
     const [userEmail, setUserEmail] = useState('')
@@ -196,7 +189,6 @@ export default function NewFogueoPage() {
             }
 
             toast.success('Fogueo creado exitosamente')
-            setTimeout(() => router.push(`/dashboard/tournaments/fogueos/${fogueo.id}`), 1000)
             setTimeout(() => router.push(`/dashboard/tournaments/fogueos/${fogueo.id}`), 1000)
         } catch {
             toast.error('Error de conexión. Intenta de nuevo.')

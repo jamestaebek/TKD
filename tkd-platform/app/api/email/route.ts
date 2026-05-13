@@ -10,9 +10,28 @@ export async function POST(request: NextRequest) {
         return NextResponse.json({ error: 'No autorizado' }, { status: 401 })
     }
 
+    const { data: userClub } = await supabase
+        .from('clubs')
+        .select('id')
+        .eq('user_id', user.id)
+        .single()
+
+    if (!userClub) {
+        return NextResponse.json({ error: 'Sin club registrado' }, { status: 403 })
+    }
+
     try {
         const { type, to, athleteName, clubName, coachName, ...body } = await request.json()
-        if (!type || !to || !athleteName || !clubName) {
+        if (!type || !to) {
+            return NextResponse.json({ error: 'Faltan parámetros' }, { status: 400 })
+        }
+        if (['approved', 'rejected', 'registered'].includes(type) && (!athleteName || !clubName)) {
+            return NextResponse.json({ error: 'Faltan parámetros' }, { status: 400 })
+        }
+        if (type === 'club_invited' && (!coachName || !body.fogueoName || !body.fogueoDate || !body.location)) {
+            return NextResponse.json({ error: 'Faltan parámetros' }, { status: 400 })
+        }
+        if (type === 'club_removed' && (!coachName || !clubName || !body.fogueoName)) {
             return NextResponse.json({ error: 'Faltan parámetros' }, { status: 400 })
         }
 

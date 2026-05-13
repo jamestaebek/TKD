@@ -126,7 +126,7 @@ export default function EditClubPage() {
         setUploading(true)
         try {
             const { data: { user } } = await supabase.auth.getUser()
-            const ext = file.name.split('.').pop()
+            const ext = file.name.split('.').pop()?.toLowerCase() ?? 'jpg'
             const path = `logos/${user?.id}.${ext}`
             const { error } = await supabase.storage
                 .from('club-assets').upload(path, file, { upsert: true })

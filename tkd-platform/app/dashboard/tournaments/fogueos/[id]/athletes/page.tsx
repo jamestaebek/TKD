@@ -7,6 +7,7 @@ import Link from 'next/link'
 import Sidebar from '@/components/Sidebar'
 import { useToast } from '@/hooks/useToast'
 import { ToastContainer } from '@/components/Toast'
+import { calculateAge } from '@/lib/utils/age'
 
 interface Athlete {
     id: string
@@ -18,15 +19,6 @@ interface Athlete {
     belt_levels: { name: string; default_level: string } | null
 }
 
-function calculateAge(birthDate: string): number {
-    if (!birthDate) return 0
-    const today = new Date()
-    const birth = new Date(birthDate)
-    let age = today.getFullYear() - birth.getFullYear()
-    const m = today.getMonth() - birth.getMonth()
-    if (m < 0 || (m === 0 && today.getDate() < birth.getDate())) age--
-    return age
-}
 
 export default function FogueoAthletesPage() {
     const params = useParams()

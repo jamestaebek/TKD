@@ -45,7 +45,7 @@ export default function PhoneInput({ value, onChange, placeholder }: Props) {
             <select
                 value={dialCode}
                 onChange={e => handleDial(e.target.value)}
-                className="bg-gray-900 border border-gray-700 rounded-xl px-3 py-3 text-white focus:outline-none focus:border-blue-500 w-28"
+                className="bg-[#0d0d1a] border border-[#1e1e2e] rounded-xl px-3 py-3 text-white focus:outline-none focus:border-blue-500 w-28"
             >
                 {COUNTRIES.map(c => (
                     <option key={c.code} value={c.dial}>
@@ -57,7 +57,7 @@ export default function PhoneInput({ value, onChange, placeholder }: Props) {
                 type="tel"
                 inputMode="numeric"
                 pattern="[0-9]*"
-                className="flex-1 bg-gray-900 border border-gray-700 rounded-xl px-4 py-3 text-white focus:outline-none focus:border-blue-500"
+                className="flex-1 bg-[#0d0d1a] border border-[#1e1e2e] rounded-xl px-4 py-3 text-white focus:outline-none focus:border-blue-500"
                 placeholder={placeholder ?? '300 000 0000'}
                 value={number}
                 onChange={e => handleNumber(e.target.value)}

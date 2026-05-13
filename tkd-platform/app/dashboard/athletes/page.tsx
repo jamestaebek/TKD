@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useMemo } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
@@ -9,6 +9,7 @@ import InviteButton from '@/components/InviteButton'
 import { useToast } from '@/hooks/useToast'
 import { ToastContainer } from '@/components/Toast'
 import { logAudit } from '@/lib/audit'
+import { calculateAge, getAgeGroup } from '@/lib/utils/age'
 
 interface Athlete {
     id: string
@@ -26,23 +27,6 @@ interface Athlete {
     belt_levels: { name: string; default_level: string } | null
 }
 
-function calculateAge(birthDate: string): number {
-    const today = new Date()
-    const birth = new Date(birthDate)
-    let age = today.getFullYear() - birth.getFullYear()
-    const m = today.getMonth() - birth.getMonth()
-    if (m < 0 || (m === 0 && today.getDate() < birth.getDate())) age--
-    return age
-}
-
-function getAgeGroup(age: number): string {
-    if (age >= 9 && age <= 11) return 'Pre-cadete'
-    if (age >= 12 && age <= 14) return 'Cadete'
-    if (age >= 15 && age <= 17) return 'Junior'
-    if (age >= 18) return 'Senior'
-    return '-'
-}
-
 const levelColors: Record<string, string> = {
     principiante: 'bg-green-900/40 text-green-400',
     avanzado: 'bg-blue-900/40 text-blue-400',
@@ -51,7 +35,7 @@ const levelColors: Record<string, string> = {
 
 export default function AthletesPage() {
     const router = useRouter()
-    const supabase = createClient()
+    const supabase = useMemo(() => createClient(), [])
     const { toasts, removeToast, toast } = useToast()
     const [athletes, setAthletes] = useState<Athlete[]>([])
     const [loading, setLoading] = useState(true)

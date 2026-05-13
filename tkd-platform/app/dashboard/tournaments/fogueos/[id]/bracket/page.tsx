@@ -1,12 +1,13 @@
 'use client'
 
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useMemo } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { useParams } from 'next/navigation'
 import Link from 'next/link'
 import Sidebar from '@/components/Sidebar'
 import { useToast } from '@/hooks/useToast'
 import { ToastContainer } from '@/components/Toast'
+import { calculateAge, getAgeGroup, getWeightCategory } from '@/lib/utils/age'
 
 interface Athlete {
     id: string
@@ -65,40 +66,6 @@ interface BracketConfig {
 }
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
-
-function calculateAge(birthDate: string): number {
-    if (!birthDate) return 0
-    const today = new Date()
-    const birth = new Date(birthDate)
-    let age = today.getFullYear() - birth.getFullYear()
-    const m = today.getMonth() - birth.getMonth()
-    if (m < 0 || (m === 0 && today.getDate() < birth.getDate())) age--
-    return age
-}
-
-function getAgeGroup(age: number): string {
-    if (age >= 9 && age <= 11) return 'Pre-cadete'
-    if (age >= 12 && age <= 14) return 'Cadete'
-    if (age >= 15 && age <= 17) return 'Junior'
-    if (age >= 18) return 'Senior'
-    return 'Infantil'
-}
-
-function getWeightCategory(weight: number): string {
-    if (weight <= 33) return '-33kg'
-    if (weight <= 37) return '-37kg'
-    if (weight <= 41) return '-41kg'
-    if (weight <= 45) return '-45kg'
-    if (weight <= 48) return '-48kg'
-    if (weight <= 51) return '-51kg'
-    if (weight <= 55) return '-55kg'
-    if (weight <= 59) return '-59kg'
-    if (weight <= 63) return '-63kg'
-    if (weight <= 68) return '-68kg'
-    if (weight <= 73) return '-73kg'
-    if (weight <= 78) return '-78kg'
-    return '+78kg'
-}
 
 function getAgeCategory(birthDate: string): string {
     if (!birthDate) return 'Infantil'
@@ -357,7 +324,7 @@ const SORT_MODE_LABELS: Record<string, string> = {
 
 export default function BracketPage() {
     const params = useParams()
-    const supabase = createClient()
+    const supabase = useMemo(() => createClient(), [])
     const { toasts, removeToast, toast } = useToast()
     const fogueoId = params.id as string
 
@@ -390,6 +357,7 @@ export default function BracketPage() {
     const [moveModal, setMoveModal] = useState<{ athleteId: string; fromKey: string } | null>(null)
     const [dragOverKey, setDragOverKey] = useState<string | null>(null)
     const [moveTargetKey, setMoveTargetKey] = useState<string>('')
+    const [updatingMatchId, setUpdatingMatchId] = useState<string | null>(null)
 
     // ── Load ────────────────────────────────────────────────────────────────
 
@@ -435,7 +403,7 @@ export default function BracketPage() {
                 const groups = buildPyramidGroups(pyrs)
                 setPyramidGroups(groups)
                 setActiveGroupId(groups[0]?.groupId ?? null)
-                for (const p of pyrs) await loadMatchesForPyramid(p.id)
+                await Promise.all(pyrs.map(p => loadMatchesForPyramid(p.id)))
             }
 
             const { data: fc } = await supabase
@@ -587,6 +555,10 @@ export default function BracketPage() {
         groupKey?: string,
         groupLabel?: string,
     ): Promise<Pyramid | null> => {
+        if (!isOrganizer) {
+            toast.error('Solo el organizador puede crear brackets')
+            return null
+        }
         const config = getBracketConfig(athletes.length)
         const { bracketSize, preMatchCount, useOutbracket } = config
 
@@ -838,7 +810,7 @@ export default function BracketPage() {
                         setActiveGroupId(groupId)
                         return updated
                     })
-                    for (const p of newPyramids) await loadMatchesForPyramid(p.id)
+                    await Promise.all(newPyramids.map(p => loadMatchesForPyramid(p.id)))
                     const mPart = males.length >= 2 ? `${males.length}M` : ''
                     const fPart = females.length >= 2 ? `${females.length}F` : ''
                     toast.success(`Fogueo ${fogueoNum} creado: ${[mPart, fPart].filter(Boolean).join(' · ')}`)
@@ -907,7 +879,7 @@ export default function BracketPage() {
                     setActiveGroupId(newPyramids[0].id)
                     return updated
                 })
-                for (const p of newPyramids) await loadMatchesForPyramid(p.id)
+                await Promise.all(newPyramids.map(p => loadMatchesForPyramid(p.id)))
                 const total = newPyramids.length
                 toast.success(`${total} bracket${total !== 1 ? 's' : ''} generados${skipped > 0 ? ` · ${skipped} omitido${skipped !== 1 ? 's' : ''}` : ''}`)
             }
@@ -933,6 +905,9 @@ export default function BracketPage() {
         isBlue: boolean,
     ) => {
         if (match.is_bye) return
+        if (updatingMatchId) return
+        setUpdatingMatchId(match.id)
+        try {
 
         const { error } = await supabase
             .from('fogueo_matches')
@@ -960,12 +935,19 @@ export default function BracketPage() {
 
         const label = match.is_pre_match ? 'Pre-match' : `Match ${match.display_number}`
         toast.success(`${label} · Ganador registrado ✓`)
+        } finally {
+            setUpdatingMatchId(null)
+        }
     }
 
     // ── Join fogueo ──────────────────────────────────────────────────────────
 
     const joinFogueo = async () => {
         if (!clubId) return
+        if (fogueo?.visibility === 'invite_only') {
+            toast.error('Este fogueo es solo por invitación.')
+            return
+        }
         if (joinedClubs.some(fc => fc.club_id === clubId)) {
             toast.warning('Tu club ya está inscrito en este fogueo')
             return
@@ -1062,9 +1044,9 @@ export default function BracketPage() {
 
                 {/* Blue */}
                 <div
-                    className={`flex items-center gap-2 px-3 py-2 border-b border-[#1e1e2e] transition ${isOrganizer && blue && match.status !== 'finished' ? 'cursor-pointer hover:bg-blue-900/30' : ''}`}
+                    className={`flex items-center gap-2 px-3 py-2 border-b border-[#1e1e2e] transition ${isOrganizer && blue && match.status !== 'finished' && updatingMatchId !== match.id ? 'cursor-pointer hover:bg-blue-900/30' : ''} ${updatingMatchId === match.id ? 'opacity-50 cursor-not-allowed' : ''}`}
                     style={{ background: blueWon ? '#1e3a5f' : '#0d1220' }}
-                    onClick={() => isOrganizer && blue && match.status !== 'finished' && updateMatchWinner(match, pyramidId, blue.id, true)}
+                    onClick={() => isOrganizer && blue && match.status !== 'finished' && !updatingMatchId && updateMatchWinner(match, pyramidId, blue.id, true)}
                 >
                     <div className="w-2 h-2 rounded-full bg-blue-500 flex-shrink-0" />
                     <div className="flex-1 min-w-0">
@@ -1082,9 +1064,9 @@ export default function BracketPage() {
 
                 {/* Red */}
                 <div
-                    className={`flex items-center gap-2 px-3 py-2 transition ${isOrganizer && red && match.status !== 'finished' ? 'cursor-pointer hover:bg-red-900/30' : ''}`}
+                    className={`flex items-center gap-2 px-3 py-2 transition ${isOrganizer && red && match.status !== 'finished' && updatingMatchId !== match.id ? 'cursor-pointer hover:bg-red-900/30' : ''} ${updatingMatchId === match.id ? 'opacity-50 cursor-not-allowed' : ''}`}
                     style={{ background: redWon ? '#3a1a1a' : '#1a0d0d' }}
-                    onClick={() => isOrganizer && red && match.status !== 'finished' && updateMatchWinner(match, pyramidId, red.id, false)}
+                    onClick={() => isOrganizer && red && match.status !== 'finished' && !updatingMatchId && updateMatchWinner(match, pyramidId, red.id, false)}
                 >
                     <div className="w-2 h-2 rounded-full bg-red-500 flex-shrink-0" />
                     <div className="flex-1 min-w-0">

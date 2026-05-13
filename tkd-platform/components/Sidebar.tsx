@@ -50,7 +50,7 @@ export default function Sidebar({ userEmail }: Props) {
 
             <nav className="flex-1 py-3">
                 {navItems.map(item => {
-                    const active = pathname === item.href
+                    const active = item.href === '/dashboard' ? pathname === '/dashboard' : pathname.startsWith(item.href)
                     return (
                         <Link
                             key={item.href}

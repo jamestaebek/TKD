@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useMemo } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { useRouter } from 'next/navigation'
 import Sidebar from '@/components/Sidebar'
@@ -8,6 +8,7 @@ import PhoneInput from '@/components/PhoneInput'
 import CountrySelect from '@/components/CountrySelect'
 import { useToast } from '@/hooks/useToast'
 import { ToastContainer } from '@/components/Toast'
+import { calculateAge, getAgeGroup } from '@/lib/utils/age'
 
 interface FormData {
     first_name: string
@@ -72,23 +73,6 @@ function Field({ label, field, type = 'text', placeholder, form, errors, update,
     )
 }
 
-function calculateAge(birthDate: string): number {
-    if (!birthDate) return 0
-    const today = new Date()
-    const birth = new Date(birthDate)
-    let age = today.getFullYear() - birth.getFullYear()
-    const m = today.getMonth() - birth.getMonth()
-    if (m < 0 || (m === 0 && today.getDate() < birth.getDate())) age--
-    return age
-}
-
-function getAgeGroup(age: number): string {
-    if (age >= 9 && age <= 11) return 'Pre-cadete'
-    if (age >= 12 && age <= 14) return 'Cadete'
-    if (age >= 15 && age <= 17) return 'Junior'
-    if (age >= 18) return 'Senior'
-    return 'Sin categoría'
-}
 
 function getLevel(beltId: string, belts: BeltLevel[]): string {
     const belt = belts.find(b => b.id === parseInt(beltId))
@@ -98,7 +82,7 @@ function getLevel(beltId: string, belts: BeltLevel[]): string {
 
 export default function NewAthletePage() {
     const router = useRouter()
-    const supabase = createClient()
+    const supabase = useMemo(() => createClient(), [])
     const { toasts, removeToast, toast } = useToast()
     const [loading, setLoading] = useState(false)
     const [uploading, setUploading] = useState(false)
@@ -179,7 +163,7 @@ export default function NewAthletePage() {
         if (!file) return
         setUploading(true)
         try {
-            const ext = file.name.split('.').pop()
+            const ext = file.name.split('.').pop()?.toLowerCase() ?? 'jpg'
             const path = `athletes/${clubId}/${Date.now()}.${ext}`
             const { error } = await supabase.storage
                 .from('club-assets').upload(path, file, { upsert: true })

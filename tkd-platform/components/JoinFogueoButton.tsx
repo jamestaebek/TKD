@@ -3,6 +3,8 @@
 import { useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { useRouter } from 'next/navigation'
+import { useToast } from '@/hooks/useToast'
+import { ToastContainer } from '@/components/Toast'
 
 interface Props {
     fogueoId: string
@@ -13,6 +15,7 @@ export default function JoinFogueoButton({ fogueoId, clubId }: Props) {
     const supabase = createClient()
     const router = useRouter()
     const [loading, setLoading] = useState(false)
+    const { toasts, removeToast, toast } = useToast()
 
     const handleJoin = async () => {
         setLoading(true)
@@ -24,7 +27,7 @@ export default function JoinFogueoButton({ fogueoId, clubId }: Props) {
             })
             if (error) {
                 console.error('Error joining:', error)
-                alert('Error al unirse. Intenta de nuevo.')
+                toast.error('Error al unirse. Intenta de nuevo.')
             } else {
                 router.refresh()
             }
@@ -36,12 +39,15 @@ export default function JoinFogueoButton({ fogueoId, clubId }: Props) {
     }
 
     return (
-        <button
-            onClick={handleJoin}
-            disabled={loading}
-            className="w-full mt-4 bg-blue-600 hover:bg-blue-700 text-white py-2 rounded-xl text-sm transition disabled:opacity-40 cursor-pointer"
-        >
-            {loading ? 'Uniéndose...' : 'Unirme a este fogueo'}
-        </button>
+        <>
+            <button
+                onClick={handleJoin}
+                disabled={loading}
+                className="w-full mt-4 bg-blue-600 hover:bg-blue-700 text-white py-2 rounded-xl text-sm transition disabled:opacity-40 cursor-pointer"
+            >
+                {loading ? 'Uniéndose...' : 'Unirme a este fogueo'}
+            </button>
+            <ToastContainer toasts={toasts} onRemove={removeToast} />
+        </>
     )
 }

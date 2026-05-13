@@ -17,7 +17,7 @@ export default function CountrySelect({ value, onChange }: Props) {
         <select
             value={value}
             onChange={e => onChange(e.target.value)}
-            className="w-full bg-gray-900 border border-gray-700 rounded-xl px-4 py-3 text-white focus:outline-none focus:border-blue-500"
+            className="w-full bg-[#0d0d1a] border border-[#1e1e2e] rounded-xl px-4 py-3 text-white focus:outline-none focus:border-blue-500"
         >
             <option value="">Selecciona un país</option>
             {COUNTRIES.map(c => (

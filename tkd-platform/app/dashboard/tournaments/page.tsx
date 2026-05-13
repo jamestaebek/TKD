@@ -12,9 +12,18 @@ export default async function TournamentsPage() {
         .from('clubs').select('id, name').eq('user_id', user.id).single()
     if (!club) redirect('/dashboard/club/register')
 
+    const { data: myFogueoClubs } = await supabase
+        .from('fogueo_clubs')
+        .select('fogueo_id')
+        .eq('club_id', club.id)
+    const joinedFogueoIds = myFogueoClubs?.map(f => f.fogueo_id).join(',') ?? ''
+
     const { data: fogueos } = await supabase
         .from('fogueos')
         .select('*, clubs(name)')
+        .or(joinedFogueoIds
+            ? `visibility.eq.public,club_id.eq.${club.id},id.in.(${joinedFogueoIds})`
+            : `visibility.eq.public,club_id.eq.${club.id}`)
         .order('event_date', { ascending: true })
 
     const today = new Date().toISOString().split('T')[0]
