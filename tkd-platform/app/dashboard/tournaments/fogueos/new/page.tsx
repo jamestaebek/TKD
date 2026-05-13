@@ -45,7 +45,9 @@ export default function NewFogueoPage() {
     const [clubSearch, setClubSearch] = useState('')
     const [athleteSearch, setAthleteSearch] = useState('')
     const [errors, setErrors] = useState<Record<string, string>>({})
-    const [step, setStep] = useState(1)
+    const [step, setStep] = useState(0)
+    const [scoringType, setScoringType] = useState<'conventional' | 'electronic'>('conventional')
+    const [roundDurationSeconds, setRoundDurationSeconds] = useState<number>(120)
 
     const [form, setForm] = useState({
         name: '',
@@ -128,6 +130,8 @@ export default function NewFogueoPage() {
                     location: form.location,
                     visibility: form.visibility,
                     status: 'open',
+                    scoring_type: scoringType,
+                    round_duration_seconds: roundDurationSeconds,
                 })
                 .select().single()
 
@@ -226,21 +230,66 @@ export default function NewFogueoPage() {
 
                         {/* Steps */}
                         <div className="flex gap-2 mb-6">
-                            {['Evento', 'Clubes', 'Atletas'].map((s, i) => (
+                            {['Tipo', 'Evento', 'Clubes', 'Atletas'].map((s, i) => (
                                 <div
                                     key={i}
-                                    className={`flex-1 py-2 text-center text-xs rounded-lg font-medium transition cursor-pointer ${step === i + 1 ? 'bg-blue-600 text-white'
-                                        : step > i + 1 ? 'bg-green-800 text-white'
+                                    className={`flex-1 py-2 text-center text-xs rounded-lg font-medium transition cursor-pointer ${step === i ? 'bg-blue-600 text-white'
+                                        : step > i ? 'bg-green-800 text-white'
                                             : 'bg-[#0d0d1a] text-gray-500 border border-[#1e1e2e]'
                                         }`}
-                                    onClick={() => step > i + 1 && setStep(i + 1)}
+                                    onClick={() => step > i && setStep(i)}
                                 >
-                                    {step > i + 1 ? '✓ ' : ''}{s}
+                                    {step > i ? '✓ ' : ''}{s}
                                 </div>
                             ))}
                         </div>
 
                         <div className="space-y-5">
+
+                            {/* Step 0 — Tipo de fogueo */}
+                            {step === 0 && (
+                                <div className="space-y-4">
+                                    <div className="bg-[#0d0d1a] border border-[#1e1e2e] rounded-2xl p-5 space-y-4">
+                                        <h2 className="text-sm font-medium text-gray-400">Sistema de puntuación</h2>
+                                        <div className="grid grid-cols-2 gap-4">
+                                            <button
+                                                onClick={() => setScoringType('conventional')}
+                                                className={`p-4 rounded-xl border text-left transition ${scoringType === 'conventional' ? 'border-amber-500 bg-amber-900/20' : 'border-[#1e1e2e] hover:border-gray-500'}`}
+                                            >
+                                                <div className="text-3xl mb-2">🥋</div>
+                                                <div className="text-sm font-semibold text-white mb-1">Convencional</div>
+                                                <div className="text-xs text-gray-500">Puntos registrados manualmente</div>
+                                            </button>
+                                            <div className="p-4 rounded-xl border border-[#1e1e2e] opacity-50 cursor-not-allowed relative">
+                                                <div className="absolute top-2 right-2 text-xs bg-blue-900/40 text-blue-400 px-2 py-0.5 rounded-full">Próximamente</div>
+                                                <div className="text-3xl mb-2">⚡</div>
+                                                <div className="text-sm font-semibold text-white mb-1">Electrónico WayChamp</div>
+                                                <div className="text-xs text-gray-500">Sistema electrónico integrado</div>
+                                            </div>
+                                        </div>
+                                        {scoringType === 'conventional' && (
+                                            <div className="space-y-2">
+                                                <label className="text-sm text-gray-400 block">Duración por ronda</label>
+                                                <select
+                                                    value={roundDurationSeconds}
+                                                    onChange={e => setRoundDurationSeconds(Number(e.target.value))}
+                                                    className="w-full bg-[#07070f] border border-[#1e1e2e] rounded-xl px-4 py-3 text-white focus:outline-none focus:border-amber-500 transition"
+                                                >
+                                                    <option value={60}>1 minuto</option>
+                                                    <option value={120}>2 minutos</option>
+                                                    <option value={180}>3 minutos</option>
+                                                </select>
+                                            </div>
+                                        )}
+                                    </div>
+                                    <button
+                                        onClick={() => setStep(1)}
+                                        className="w-full bg-amber-600 hover:bg-amber-700 text-white py-3 rounded-xl font-semibold transition"
+                                    >
+                                        Siguiente → Información del evento
+                                    </button>
+                                </div>
+                            )}
 
                             {/* Step 1 — Info del evento */}
                             {step === 1 && (
@@ -313,12 +362,17 @@ export default function NewFogueoPage() {
                                         </div>
                                     </div>
 
-                                    <button
-                                        onClick={() => validate() && setStep(2)}
-                                        className="w-full bg-blue-600 text-white py-3 rounded-xl font-semibold hover:bg-blue-700 transition"
-                                    >
-                                        Siguiente → Invitar clubes
-                                    </button>
+                                    <div className="flex gap-3">
+                                        <button onClick={() => setStep(0)} className="flex-1 bg-[#0d0d1a] border border-[#1e1e2e] text-white py-3 rounded-xl font-semibold hover:bg-[#13131f] transition">
+                                            ← Atrás
+                                        </button>
+                                        <button
+                                            onClick={() => validate() && setStep(2)}
+                                            className="flex-1 bg-blue-600 text-white py-3 rounded-xl font-semibold hover:bg-blue-700 transition"
+                                        >
+                                            Siguiente → Invitar clubes
+                                        </button>
+                                    </div>
                                 </div>
                             )}
 
@@ -475,6 +529,8 @@ export default function NewFogueoPage() {
                                             <div><span className="text-gray-500">Visibilidad:</span> <span className="text-white">{form.visibility === 'public' ? 'Público' : 'Solo invitados'}</span></div>
                                             <div><span className="text-gray-500">Clubes invitados:</span> <span className="text-white">{invitedClubs.length}</span></div>
                                             <div><span className="text-gray-500">Mis atletas:</span> <span className="text-white">{selectedAthletes.length}</span></div>
+                                            <div><span className="text-gray-500">Tipo:</span> <span className="text-white">{scoringType === 'conventional' ? 'Convencional' : 'Electrónico'}</span></div>
+                                            <div><span className="text-gray-500">Duración ronda:</span> <span className="text-white">{roundDurationSeconds / 60} min</span></div>
                                         </div>
                                     </div>
 

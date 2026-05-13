@@ -1081,6 +1081,17 @@ export default function BracketPage() {
                     </div>
                     {redWon && <span className="text-xs flex-shrink-0" style={{ color: '#fca5a5' }}>✓</span>}
                 </div>
+                {!isPreMatch && fogueo?.scoring_type === 'conventional' &&
+                    match.status !== 'finished' &&
+                    match.athlete_blue_id &&
+                    match.athlete_red_id && (
+                        <Link
+                            href={`/dashboard/tournaments/fogueos/${fogueoId}/match/${match.id}`}
+                            className="w-full text-center text-xs py-1.5 bg-amber-900/20 border-t border-amber-900/40 text-amber-400 hover:bg-amber-900/30 transition block"
+                        >
+                            Iniciar combate →
+                        </Link>
+                    )}
             </div>
         )
     }
