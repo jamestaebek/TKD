@@ -54,8 +54,8 @@ type AthleteStats = {
 }
 
 type FeedbackEntry = {
-    tags: string[]
-    notes: string
+    predefined_tags: string[]
+    free_text: string
 }
 
 // ─── Page ────────────────────────────────────────────────────────────────────
@@ -198,8 +198,8 @@ export default async function ResultsPage({
         id?: string
         athlete_id: string
         match_id: string
-        tags: string[] | null
-        notes: string | null
+        predefined_tags: string[] | null
+        free_text: string | null
         athletes: { id: string; first_name: string; last_name: string } | { id: string; first_name: string; last_name: string }[] | null
         fogueo_matches: {
             id: string
@@ -248,8 +248,8 @@ export default async function ResultsPage({
         if (!athlete) continue
 
         const entry: FeedbackEntry = {
-            tags: raw.tags ?? [],
-            notes: raw.notes ?? '',
+            predefined_tags: raw.predefined_tags ?? [],
+            free_text: raw.free_text ?? '',
         }
         const cur = feedbackByAthlete.get(athlete.id) ?? { athlete, entries: [] }
         cur.entries.push(entry)
@@ -470,15 +470,15 @@ export default async function ResultsPage({
                         ) : (
                             <div className="space-y-4">
                                 {Array.from(feedbackByAthlete.values()).map(({ athlete, entries }) => {
-                                    // Agrupar tags con conteo
+                                    // Agrupar predefined_tags con conteo
                                     const tagCounts = new Map<string, number>()
                                     for (const e of entries) {
-                                        for (const t of e.tags) {
+                                        for (const t of e.predefined_tags) {
                                             tagCounts.set(t, (tagCounts.get(t) ?? 0) + 1)
                                         }
                                     }
                                     const notes = entries
-                                        .map(e => e.notes.trim())
+                                        .map(e => e.free_text.trim())
                                         .filter(n => n.length > 0)
 
                                     const initials = `${athlete.first_name[0] ?? ''}${athlete.last_name[0] ?? ''}`.toUpperCase()

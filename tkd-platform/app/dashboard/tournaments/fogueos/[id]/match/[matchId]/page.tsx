@@ -547,13 +547,13 @@ export default function MatchPage() {
             if ((selectedTags.blue.length > 0 || freeText.blue.trim()) && match.athlete_blue_id) {
                 feedbackEntries.push({
                     match_id: matchId, athlete_id: match.athlete_blue_id,
-                    tags: selectedTags.blue, notes: freeText.blue.trim(),
+                    predefined_tags: selectedTags.blue, free_text: freeText.blue.trim(),
                 })
             }
             if ((selectedTags.red.length > 0 || freeText.red.trim()) && match.athlete_red_id) {
                 feedbackEntries.push({
                     match_id: matchId, athlete_id: match.athlete_red_id,
-                    tags: selectedTags.red, notes: freeText.red.trim(),
+                    predefined_tags: selectedTags.red, free_text: freeText.red.trim(),
                 })
             }
             if (feedbackEntries.length > 0) {
