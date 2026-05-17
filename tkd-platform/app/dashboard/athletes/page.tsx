@@ -49,6 +49,14 @@ export default function AthletesPage() {
     const [filterLevel, setFilterLevel] = useState('')
     const [filterStatus, setFilterStatus] = useState('')
     const [confirmDelete, setConfirmDelete] = useState<string | null>(null)
+    const [showQR, setShowQR] = useState(false)
+
+    // URL base para el link de invitación al registro de atletas
+    const appBaseUrl = process.env.NEXT_PUBLIC_APP_URL ?? 'https://tkd-five.vercel.app'
+    const inviteUrl = inviteToken ? `${appBaseUrl}/register/athlete/${inviteToken}` : ''
+    const qrSrc = inviteUrl
+        ? `https://api.qrserver.com/v1/create-qr-code/?size=250x250&data=${encodeURIComponent(inviteUrl)}`
+        : ''
 
     useEffect(() => {
         const load = async () => {
@@ -194,6 +202,14 @@ export default function AthletesPage() {
                             </div>
                             <div className="flex items-center gap-3">
                                 {inviteToken && <InviteButton token={inviteToken} />}
+                                {inviteToken && (
+                                    <button
+                                        onClick={() => setShowQR(true)}
+                                        className="flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-medium transition bg-[#0d0d1a] border border-[#1e1e2e] text-gray-300 hover:border-blue-500 hover:text-blue-400"
+                                    >
+                                        📱 Ver QR
+                                    </button>
+                                )}
                                 <Link
                                     href="/dashboard/athletes/new"
                                     className="bg-blue-600 hover:bg-blue-700 text-white px-5 py-2.5 rounded-xl text-sm font-medium transition"
@@ -398,6 +414,14 @@ export default function AthletesPage() {
                                         <p className="text-gray-500 text-sm mb-6">Registra el primer atleta o comparte el link de invitación</p>
                                         <div className="flex items-center justify-center gap-3">
                                             {inviteToken && <InviteButton token={inviteToken} />}
+                                            {inviteToken && (
+                                                <button
+                                                    onClick={() => setShowQR(true)}
+                                                    className="flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-medium transition bg-[#0d0d1a] border border-[#1e1e2e] text-gray-300 hover:border-blue-500 hover:text-blue-400"
+                                                >
+                                                    📱 Ver QR
+                                                </button>
+                                            )}
                                             <Link href="/dashboard/athletes/new" className="bg-blue-600 hover:bg-blue-700 text-white px-6 py-3 rounded-xl text-sm font-medium transition">
                                                 + Registrar atleta
                                             </Link>
@@ -412,6 +436,48 @@ export default function AthletesPage() {
                             </div>
                         )}
                     </div>
+
+                    {/* Modal QR de invitación */}
+                    {showQR && inviteUrl && (
+                        <div
+                            className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4"
+                            onClick={() => setShowQR(false)}
+                        >
+                            <div
+                                className="bg-[#0d0d1a] border border-[#1e1e2e] rounded-2xl p-6 max-w-sm w-full"
+                                onClick={e => e.stopPropagation()}
+                            >
+                                <h3 className="text-lg font-semibold text-white text-center mb-1">
+                                    Escanea para registrarte
+                                </h3>
+                                <p className="text-xs text-gray-500 text-center mb-5">
+                                    Comparte este QR con tus atletas
+                                </p>
+                                <div className="bg-white rounded-xl p-4 flex items-center justify-center mb-4">
+                                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                                    <img
+                                        src={qrSrc}
+                                        alt="QR de invitación"
+                                        width={250}
+                                        height={250}
+                                        className="block"
+                                    />
+                                </div>
+                                <div className="bg-[#07070f] border border-[#1e1e2e] rounded-xl px-3 py-2 mb-4">
+                                    <div className="text-xs text-gray-500 mb-1">Link</div>
+                                    <div className="text-xs text-gray-300 break-all font-mono">
+                                        {inviteUrl}
+                                    </div>
+                                </div>
+                                <button
+                                    onClick={() => setShowQR(false)}
+                                    className="w-full bg-[#13131f] border border-[#1e1e2e] text-white py-2.5 rounded-xl text-sm font-medium hover:bg-[#1a1a2e] transition"
+                                >
+                                    Cerrar
+                                </button>
+                            </div>
+                        </div>
+                    )}
 
                     {/* Modal confirmar eliminación */}
                     {confirmDelete && (
