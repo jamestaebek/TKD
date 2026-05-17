@@ -181,23 +181,79 @@ export default async function ResultsPage({
         gjByMatch.set(r.match_id, cur)
     }
 
-    // Feedback (solo para atletas del club)
-    const { data: feedbackData } = matchIds.length > 0
+    // Feedback — query directa por athlete_id (no por match_id) para evitar
+    // depender del mapeo de fogueo_athletes con join (que puede devolver
+    // arrays). Filtramos al fogueo seleccionado vía la cadena
+    // match_feedback → fogueo_matches → fogueo_pyramids.
+    const { data: myAthletesIdsData } = await supabase
+        .from('fogueo_athletes')
+        .select('athlete_id')
+        .eq('fogueo_id', selectedFogueoId)
+        .eq('club_id', club.id)
+    const myAthleteIds: string[] = (myAthletesIdsData ?? [])
+        .map(r => r.athlete_id as string)
+        .filter(Boolean)
+
+    type FeedbackRow = {
+        id?: string
+        athlete_id: string
+        match_id: string
+        tags: string[] | null
+        notes: string | null
+        athletes: { id: string; first_name: string; last_name: string } | { id: string; first_name: string; last_name: string }[] | null
+        fogueo_matches: {
+            id: string
+            pyramid_id: string
+            fogueo_pyramids: { fogueo_id: string } | { fogueo_id: string }[] | null
+        } | {
+            id: string
+            pyramid_id: string
+            fogueo_pyramids: { fogueo_id: string } | { fogueo_id: string }[] | null
+        }[] | null
+    }
+
+    const { data: feedbackData } = myAthleteIds.length > 0
         ? await supabase
             .from('match_feedback')
-            .select('match_id, athlete_id, tags, notes')
-            .in('match_id', matchIds)
-        : { data: [] as { match_id: string; athlete_id: string; tags: string[] | null; notes: string | null }[] }
-    const feedbackByAthlete = new Map<string, FeedbackEntry[]>()
-    for (const f of (feedbackData ?? [])) {
-        if (!clubAthleteIds.has(f.athlete_id as string)) continue
+            .select(`
+                *,
+                athletes(id, first_name, last_name),
+                fogueo_matches(
+                    id,
+                    pyramid_id,
+                    fogueo_pyramids(fogueo_id)
+                )
+            `)
+            .in('athlete_id', myAthleteIds)
+        : { data: [] as FeedbackRow[] }
+
+    const unwrap = <T,>(v: T | T[] | null | undefined): T | null => {
+        if (!v) return null
+        return Array.isArray(v) ? (v[0] ?? null) : v
+    }
+
+    type FeedbackByAthlete = {
+        athlete: { id: string; first_name: string; last_name: string }
+        entries: FeedbackEntry[]
+    }
+    const feedbackByAthlete = new Map<string, FeedbackByAthlete>()
+
+    for (const raw of ((feedbackData ?? []) as FeedbackRow[])) {
+        // Filtrar al fogueo seleccionado vía la cadena de joins
+        const fm = unwrap(raw.fogueo_matches)
+        const fp = unwrap(fm?.fogueo_pyramids)
+        if (!fp || fp.fogueo_id !== selectedFogueoId) continue
+
+        const athlete = unwrap(raw.athletes)
+        if (!athlete) continue
+
         const entry: FeedbackEntry = {
-            tags: (f.tags as string[] | null) ?? [],
-            notes: (f.notes as string | null) ?? '',
+            tags: raw.tags ?? [],
+            notes: raw.notes ?? '',
         }
-        const arr = feedbackByAthlete.get(f.athlete_id as string) ?? []
-        arr.push(entry)
-        feedbackByAthlete.set(f.athlete_id as string, arr)
+        const cur = feedbackByAthlete.get(athlete.id) ?? { athlete, entries: [] }
+        cur.entries.push(entry)
+        feedbackByAthlete.set(athlete.id, cur)
     }
 
     // ── Computar estadísticas por atleta del club ───────────────────────────
@@ -413,10 +469,7 @@ export default async function ResultsPage({
                             </p>
                         ) : (
                             <div className="space-y-4">
-                                {clubAthletes.map(a => {
-                                    const entries = feedbackByAthlete.get(a.id)
-                                    if (!entries || entries.length === 0) return null
-
+                                {Array.from(feedbackByAthlete.values()).map(({ athlete, entries }) => {
                                     // Agrupar tags con conteo
                                     const tagCounts = new Map<string, number>()
                                     for (const e of entries) {
@@ -428,10 +481,17 @@ export default async function ResultsPage({
                                         .map(e => e.notes.trim())
                                         .filter(n => n.length > 0)
 
+                                    const initials = `${athlete.first_name[0] ?? ''}${athlete.last_name[0] ?? ''}`.toUpperCase()
+
                                     return (
-                                        <div key={a.id} className="bg-[#07070f] border border-[#1e1e2e] rounded-xl p-4">
-                                            <div className="text-sm font-semibold text-white mb-3">
-                                                {fullName(a)}
+                                        <div key={athlete.id} className="bg-[#07070f] border border-[#1e1e2e] rounded-xl p-4">
+                                            <div className="flex items-center gap-3 mb-3">
+                                                <div className="w-10 h-10 rounded-full bg-blue-900/40 border border-blue-900/60 flex items-center justify-center text-sm font-semibold text-blue-300 flex-shrink-0">
+                                                    {initials || '—'}
+                                                </div>
+                                                <div className="text-sm font-semibold text-white truncate">
+                                                    {athlete.first_name} {athlete.last_name}
+                                                </div>
                                             </div>
                                             {tagCounts.size > 0 && (
                                                 <div className="flex flex-wrap gap-1.5 mb-3">
@@ -442,7 +502,7 @@ export default async function ResultsPage({
                                                                 key={tag}
                                                                 className="text-xs px-2.5 py-1 rounded-full bg-blue-900/30 border border-blue-900/60 text-blue-300"
                                                             >
-                                                                {tag}{count > 1 ? ` ·${count}` : ''}
+                                                                {tag}{count > 1 ? ` (${count})` : ''}
                                                             </span>
                                                         ))}
                                                 </div>
