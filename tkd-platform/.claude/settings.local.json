@@ -4,7 +4,9 @@
       "Bash(npx tsc *)",
       "Bash(echo \"EXIT: $?\")",
       "Bash(node -e ' *)",
-      "Bash(npm uninstall *)"
+      "Bash(npm uninstall *)",
+      "Bash(echo \"EXIT:$?\")",
+      "Bash(node *)"
     ]
   }
 }

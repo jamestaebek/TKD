@@ -47,7 +47,6 @@ export default function NewFogueoPage() {
     const [errors, setErrors] = useState<Record<string, string>>({})
     const [step, setStep] = useState(0)
     const [scoringType, setScoringType] = useState<'conventional' | 'electronic'>('conventional')
-    const [roundDurationSeconds, setRoundDurationSeconds] = useState<number>(120)
 
     const [form, setForm] = useState({
         name: '',
@@ -131,7 +130,7 @@ export default function NewFogueoPage() {
                     visibility: form.visibility,
                     status: 'open',
                     scoring_type: scoringType,
-                    round_duration_seconds: roundDurationSeconds,
+                    round_duration_seconds: 120,
                 })
                 .select().single()
 
@@ -267,20 +266,6 @@ export default function NewFogueoPage() {
                                                 <div className="text-xs text-gray-500">Sistema electrónico integrado</div>
                                             </div>
                                         </div>
-                                        {scoringType === 'conventional' && (
-                                            <div className="space-y-2">
-                                                <label className="text-sm text-gray-400 block">Duración por ronda</label>
-                                                <select
-                                                    value={roundDurationSeconds}
-                                                    onChange={e => setRoundDurationSeconds(Number(e.target.value))}
-                                                    className="w-full bg-[#07070f] border border-[#1e1e2e] rounded-xl px-4 py-3 text-white focus:outline-none focus:border-amber-500 transition"
-                                                >
-                                                    <option value={60}>1 minuto</option>
-                                                    <option value={120}>2 minutos</option>
-                                                    <option value={180}>3 minutos</option>
-                                                </select>
-                                            </div>
-                                        )}
                                     </div>
                                     <button
                                         onClick={() => setStep(1)}
@@ -530,7 +515,6 @@ export default function NewFogueoPage() {
                                             <div><span className="text-gray-500">Clubes invitados:</span> <span className="text-white">{invitedClubs.length}</span></div>
                                             <div><span className="text-gray-500">Mis atletas:</span> <span className="text-white">{selectedAthletes.length}</span></div>
                                             <div><span className="text-gray-500">Tipo:</span> <span className="text-white">{scoringType === 'conventional' ? 'Convencional' : 'Electrónico'}</span></div>
-                                            <div><span className="text-gray-500">Duración ronda:</span> <span className="text-white">{roundDurationSeconds / 60} min</span></div>
                                         </div>
                                     </div>
 

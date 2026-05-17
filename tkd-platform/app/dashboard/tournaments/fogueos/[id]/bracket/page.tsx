@@ -247,6 +247,67 @@ function getBracketConfig(n: number): BracketConfig {
     return { bracketSize: upper, preMatchCount: 0, byeCount: byesNeeded, useOutbracket: false }
 }
 
+/**
+ * BUG-5/BUG-6 — distribuye atletas y BYEs en el bracket de forma uniforme.
+ *
+ * Estrategia: los matches con BYE se intercalan con matches reales.
+ * - Si los BYEs son minoría: ocupan posiciones impares (M2, M4, ...).
+ * - Si los BYEs son mayoría: los matches reales ocupan posiciones impares
+ *   y el resto recibe BYE.
+ *
+ * Esto garantiza que ningún match enfrente BYE vs BYE y que los BYEs se
+ * distribuyan a lo largo de la ronda 1.
+ */
+function distributeSlots(
+    athletes: Athlete[],
+    bracketSize: number,
+): (Athlete | null)[] {
+    const total = athletes.length
+    const byeCount = bracketSize - total
+    const totalMatches = bracketSize / 2
+
+    if (byeCount === 0) {
+        const slots: (Athlete | null)[] = []
+        athletes.forEach(a => slots.push(a))
+        return slots
+    }
+
+    const realCount = totalMatches - byeCount
+    const byeMatchIndices = new Set<number>()
+
+    if (byeCount <= realCount) {
+        for (let i = 0; i < byeCount; i++) {
+            byeMatchIndices.add(1 + 2 * i)
+        }
+    } else {
+        const realIndices = new Set<number>()
+        for (let i = 0; i < realCount; i++) {
+            realIndices.add(1 + 2 * i)
+        }
+        for (let m = 0; m < totalMatches; m++) {
+            if (!realIndices.has(m)) byeMatchIndices.add(m)
+        }
+    }
+
+    const slots: (Athlete | null)[] = new Array(bracketSize).fill(null)
+    let athleteIdx = 0
+
+    for (let matchIdx = 0; matchIdx < totalMatches; matchIdx++) {
+        const blueSlot = matchIdx * 2
+        const redSlot = matchIdx * 2 + 1
+
+        if (byeMatchIndices.has(matchIdx)) {
+            slots[blueSlot] = athletes[athleteIdx++] ?? null
+            slots[redSlot] = null
+        } else {
+            slots[blueSlot] = athletes[athleteIdx++] ?? null
+            slots[redSlot] = athletes[athleteIdx++] ?? null
+        }
+    }
+
+    return slots
+}
+
 function generateSubtitle(sortMode: string, athletes: Athlete[]): string {
     if (athletes.length === 0) return ''
     switch (sortMode) {
@@ -688,27 +749,18 @@ export default function BracketPage() {
 
         } else {
             // ── Standard BYE path ────────────────────────────────────────────
-            // BYEs always go at the END of R1 slots (official TKD rule).
-            // Each BYE slot = one real athlete + one null partner → winner is the athlete.
-            const { byeCount } = config
+            // BUG-5/BUG-6 — los BYEs se distribuyen intercalados (no agrupados al final)
+            // para evitar matches BYE-vs-BYE.
             const rounds = Math.log2(bracketSize)
-            const r1MatchCount = bracketSize / 2
-            const realMatchCount = r1MatchCount - byeCount
 
-            // Real pairs at the front, [athlete, null] BYE pairs at the back
-            const finalSlots: (Athlete | null)[] = []
-            for (let i = 0; i < realMatchCount * 2; i++) {
-                finalSlots.push(athletes[i] ?? null)
-            }
-            for (let i = 0; i < byeCount; i++) {
-                finalSlots.push(athletes[realMatchCount * 2 + i] ?? null)
-                finalSlots.push(null)
-            }
+            const finalSlots = distributeSlots(athletes, bracketSize)
 
             const round1: any[] = []
             for (let i = 0; i < bracketSize; i += 2) {
                 const blue = finalSlots[i] ?? null
                 const red = finalSlots[i + 1] ?? null
+                // Ambos null no debería ocurrir con distributeSlots — saltar por seguridad
+                if (!blue && !red) continue
                 const isBye = !blue || !red
                 round1.push({
                     pyramid_id: pyramid.id,
@@ -1081,7 +1133,7 @@ export default function BracketPage() {
                     </div>
                     {redWon && <span className="text-xs flex-shrink-0" style={{ color: '#fca5a5' }}>✓</span>}
                 </div>
-                {!isPreMatch && fogueo?.scoring_type === 'conventional' &&
+                {fogueo?.scoring_type === 'conventional' &&
                     match.status !== 'finished' &&
                     match.athlete_blue_id &&
                     match.athlete_red_id && (
@@ -1187,22 +1239,23 @@ export default function BracketPage() {
                         {/* Main bracket — progressive disclosure */}
                         <div className="flex gap-3 overflow-x-auto pb-4">
                             {visibleRounds.map(round => {
-                                const realMatches = mainMatches.filter(m => m.round_number === round && !m.is_bye)
-                                // BYE cards shown only in R1
-                                const byeMatches = round === 1
-                                    ? mainMatches.filter(m => m.round_number === 1 && m.is_bye)
-                                    : []
+                                // BUG visual — render unificado ordenado por match_number.
+                                // En R1 se intercalan reales y BYEs; en R2+ los BYEs no se muestran.
+                                const roundMatches = mainMatches
+                                    .filter(m => m.round_number === round && (round === 1 || !m.is_bye))
+                                    .sort((a, b) => a.match_number - b.match_number)
+                                const realCount = roundMatches.filter(m => !m.is_bye).length
                                 return (
                                     <div key={round} className="flex-shrink-0" style={{ minWidth: '185px' }}>
                                         <div className="flex items-center justify-between text-xs text-gray-500 uppercase tracking-wider mb-3 px-1">
                                             <span>{getRoundName(round, totalRounds)}</span>
-                                            <span className="text-gray-600">{realMatches.length}c</span>
+                                            <span className="text-gray-600">{realCount}c</span>
                                         </div>
                                         <div className="space-y-2">
-                                            {realMatches.map(match => (
-                                                <MatchCard key={match.id} match={match} pyramidId={pyramid.id} />
-                                            ))}
-                                            {byeMatches.map(match => {
+                                            {roundMatches.map(match => {
+                                                if (!match.is_bye) {
+                                                    return <MatchCard key={match.id} match={match} pyramidId={pyramid.id} />
+                                                }
                                                 const byeAthlete = getAthleteById(match.winner_id)
                                                 return (
                                                     <div key={match.id} className="rounded-xl overflow-hidden"
