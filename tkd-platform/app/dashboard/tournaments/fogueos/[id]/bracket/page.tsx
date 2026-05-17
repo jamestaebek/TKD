@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback, useMemo } from 'react'
 import { createClient } from '@/lib/supabase/client'
-import { useParams } from 'next/navigation'
+import { useParams, useSearchParams } from 'next/navigation'
 import Link from 'next/link'
 import Sidebar from '@/components/Sidebar'
 import { useToast } from '@/hooks/useToast'
@@ -385,6 +385,7 @@ const SORT_MODE_LABELS: Record<string, string> = {
 
 export default function BracketPage() {
     const params = useParams()
+    const searchParams = useSearchParams()
     const supabase = useMemo(() => createClient(), [])
     const { toasts, removeToast, toast } = useToast()
     const fogueoId = params.id as string
@@ -463,7 +464,28 @@ export default function BracketPage() {
                 setPyramids(pyrs)
                 const groups = buildPyramidGroups(pyrs)
                 setPyramidGroups(groups)
-                setActiveGroupId(groups[0]?.groupId ?? null)
+
+                // Si la URL trae ?pyramid=UUID, activar la pirámide correspondiente.
+                // En modo gender_only la pirámide vive bajo parent_group_id; en el
+                // resto, la pirámide ES el grupo (groupId === pyramid.id).
+                const pyramidParam = searchParams.get('pyramid')
+                console.log('pyramid param:', pyramidParam)
+                console.log('all pyramids:', pyrs.map(p => p.id))
+
+                if (pyramidParam) {
+                    const found = pyrs.find(p => p.id === pyramidParam)
+                    console.log('found pyramid:', found)
+                    if (found) {
+                        const groupId = found.parent_group_id ?? found.id
+                        console.log('setting activeGroupId:', groupId)
+                        setActiveGroupId(groupId)
+                    } else {
+                        setActiveGroupId(groups[0]?.groupId ?? null)
+                    }
+                } else {
+                    setActiveGroupId(groups[0]?.groupId ?? null)
+                }
+
                 await Promise.all(pyrs.map(p => loadMatchesForPyramid(p.id)))
             }
 

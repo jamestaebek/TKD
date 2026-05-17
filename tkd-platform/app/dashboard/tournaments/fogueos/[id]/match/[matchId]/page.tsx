@@ -192,7 +192,7 @@ export default function MatchPage() {
     const [userEmail, setUserEmail] = useState('')
     const [fogueoName, setFogueoName] = useState('')
     const [pyramidLabel, setPyramidLabel] = useState('')
-    const [pyramidId, setPyramidId] = useState('')
+    const [currentPyramidId, setCurrentPyramidId] = useState('')
     const [match, setMatch] = useState<Record<string, unknown> | null>(null)
     const [blueAthlete, setBlueAthlete] = useState<Record<string, unknown> | null>(null)
     const [redAthlete, setRedAthlete] = useState<Record<string, unknown> | null>(null)
@@ -275,11 +275,8 @@ export default function MatchPage() {
                 (pyramid?.name as string | null) ??
                 ''
             )
-            setPyramidId(
-                (pyramid?.id as string | undefined) ??
-                (m.pyramid_id as string | undefined) ??
-                ''
-            )
+            // Leer pyramid_id directo de la fila — el join puede llegar como array
+            setCurrentPyramidId((m.pyramid_id as string | undefined) ?? '')
 
             if (m.status === 'finished') toast.warning('Este match ya fue finalizado')
 
@@ -574,9 +571,10 @@ export default function MatchPage() {
 
             const winnerName = matchWinner === 'blue' ? shortName(blueAthlete) : shortName(redAthlete)
             toast.success(`¡${winnerName} avanza!`)
+            console.log('Redirecting to pyramid:', currentPyramidId)
             setTimeout(
                 () => router.push(
-                    `/dashboard/tournaments/fogueos/${fogueoId}/bracket?pyramid=${pyramidId}`
+                    `/dashboard/tournaments/fogueos/${fogueoId}/bracket?pyramid=${currentPyramidId}`
                 ),
                 1500
             )
