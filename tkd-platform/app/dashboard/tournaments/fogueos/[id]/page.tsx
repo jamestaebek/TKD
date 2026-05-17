@@ -3,6 +3,7 @@ import { redirect } from 'next/navigation'
 import Link from 'next/link'
 import Sidebar from '@/components/Sidebar'
 import JoinFogueoButton from '@/components/JoinFogueoButton'
+import FinalizeFogueoButton from '@/components/FinalizeFogueoButton'
 
 export default async function FogueoDetailPage({ params }: { params: Promise<{ id: string }> }) {
     const { id } = await params
@@ -85,6 +86,12 @@ export default async function FogueoDetailPage({ params }: { params: Promise<{ i
                             </p>
                         </div>
                         <div className="flex gap-2">
+                            {isOrganizer && fogueo.status !== 'finished' && (
+                                <FinalizeFogueoButton
+                                    fogueoId={id}
+                                    fogueoName={fogueo.name}
+                                />
+                            )}
                             {isOrganizer && (
                                 <Link
                                     href={`/dashboard/tournaments/fogueos/${id}/bracket`}

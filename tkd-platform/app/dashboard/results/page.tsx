@@ -89,7 +89,7 @@ export default async function ResultsPage({
         .from('fogueos')
         .select('id, name, event_date, scoring_type, status')
         .or(orClause)
-        .eq('status', 'finished')
+        .in('status', ['finished', 'in_progress'])
         .order('event_date', { ascending: false })
 
     const fogueos = (fogueosData ?? []) as FogueoLite[]
