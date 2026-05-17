@@ -190,6 +190,8 @@ export default function MatchPage() {
 
     // C1 — header state
     const [userEmail, setUserEmail] = useState('')
+    const [userId, setUserId] = useState('')
+    const [clubId, setClubId] = useState('')
     const [fogueoName, setFogueoName] = useState('')
     const [pyramidLabel, setPyramidLabel] = useState('')
     const [currentPyramidId, setCurrentPyramidId] = useState('')
@@ -242,6 +244,12 @@ export default function MatchPage() {
             const { data: { user } } = await supabase.auth.getUser()
             if (!user) return
             setUserEmail(user.email ?? '')
+            setUserId(user.id)
+
+            // Club del entrenador actual — necesario para el INSERT en match_feedback
+            const { data: clubRow } = await supabase
+                .from('clubs').select('id').eq('user_id', user.id).single()
+            if (clubRow?.id) setClubId(clubRow.id as string)
 
             // BUG-2 — NO leer round_duration_seconds; los tiempos se ingresan
             // antes de cada match desde la pantalla de configuración inicial.
@@ -544,20 +552,47 @@ export default function MatchPage() {
             }
 
             const feedbackEntries: Record<string, unknown>[] = []
-            if ((selectedTags.blue.length > 0 || freeText.blue.trim()) && match.athlete_blue_id) {
+
+            // Atleta azul
+            const blueTags = selectedTags.blue ?? []
+            const blueTextRaw = freeText.blue ?? ''
+            if ((blueTags.length > 0 || blueTextRaw.trim()) && match.athlete_blue_id) {
                 feedbackEntries.push({
-                    match_id: matchId, athlete_id: match.athlete_blue_id,
-                    predefined_tags: selectedTags.blue, free_text: freeText.blue.trim(),
+                    match_id: matchId,
+                    athlete_id: match.athlete_blue_id,
+                    club_id: clubId,
+                    predefined_tags: blueTags,
+                    free_text: blueTextRaw.trim() || null,
+                    created_by: userId,
                 })
             }
-            if ((selectedTags.red.length > 0 || freeText.red.trim()) && match.athlete_red_id) {
+
+            // Atleta rojo
+            const redTags = selectedTags.red ?? []
+            const redTextRaw = freeText.red ?? ''
+            if ((redTags.length > 0 || redTextRaw.trim()) && match.athlete_red_id) {
                 feedbackEntries.push({
-                    match_id: matchId, athlete_id: match.athlete_red_id,
-                    predefined_tags: selectedTags.red, free_text: freeText.red.trim(),
+                    match_id: matchId,
+                    athlete_id: match.athlete_red_id,
+                    club_id: clubId,
+                    predefined_tags: redTags,
+                    free_text: redTextRaw.trim() || null,
+                    created_by: userId,
                 })
             }
+
+            console.log('Saving feedback:', feedbackEntries)
+            console.log('selectedTags:', selectedTags)
+            console.log('freeText:', freeText)
+
             if (feedbackEntries.length > 0) {
-                await supabase.from('match_feedback').insert(feedbackEntries)
+                const { error: fbError } = await supabase
+                    .from('match_feedback')
+                    .insert(feedbackEntries)
+
+                if (fbError) {
+                    console.error('Feedback error:', fbError)
+                }
             }
 
             const nextBracketRound = (match.round_number as number) + 1
